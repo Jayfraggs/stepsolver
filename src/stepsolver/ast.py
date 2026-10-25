@@ -59,6 +59,7 @@ class Operation(Enum):
     CANCEL = "cancel"
     APART = "apart"
     SOLVE = "solve"
+    NSOLVE = "nsolve"
     SOLVE_INEQUALITY = "solve_inequality"
     DIFFERENTIATE = "diff"
     INTEGRATE = "integrate"

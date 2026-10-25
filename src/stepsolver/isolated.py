@@ -35,7 +35,7 @@ from stepsolver.presentation import (
     StepPayload,
     solve_payload,
 )
-from stepsolver.results import ExactResult, SolveResult
+from stepsolver.results import ExactResult, NumericResult, SolveResult
 from stepsolver.solver import Solver
 
 
@@ -135,7 +135,7 @@ class IsolatedSolution:
     """Bounded solver output returned to an agent."""
 
     normalized_expression: str
-    status: Literal["exact", "divergent", "undefined", "unsolved"]
+    status: Literal["exact", "numeric", "divergent", "undefined", "unsolved"]
     result: str | None
     latex: str | None
     reason: str | None
@@ -380,7 +380,7 @@ def bounded_solution(
         status=payload.status,
         result=(
             _bounded_text(format_value(result.value), limits)
-            if isinstance(result, ExactResult)
+            if isinstance(result, ExactResult | NumericResult)
             else None
         ),
         latex=_bounded_optional_text(payload.result_latex, limits),

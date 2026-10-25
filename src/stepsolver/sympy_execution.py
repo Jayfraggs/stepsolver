@@ -197,6 +197,8 @@ class SympyExecutor:
                 equations = self._converter.equations(arguments[0])
                 symbols = self._converter.symbols(arguments[1])
                 return _solve_equations(equations, symbols)
+            case Operation.NSOLVE:
+                raise BackendError("numerical solves require the dedicated execution path")
             case Operation.SOLVE_INEQUALITY:
                 expect_arity(query, 2)
                 symbol = expect_symbol(arguments[1], role="inequality variable")

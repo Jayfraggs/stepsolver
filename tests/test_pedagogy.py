@@ -7,6 +7,7 @@ from stepsolver import (
     ExactResult,
     ScalarValue,
     Solver,
+    UnsolvedResult,
     format_ascii,
     format_expression,
     format_latex_expression,
@@ -326,7 +327,7 @@ def test_general_rational_logarithmic_integrals_with_multiple_poles_are_still_de
 ) -> None:
     """A partial-fraction result with several poles is not faked as a one-log answer."""
     result = solver.solve("integrate(1/(x^2-1),x)")
-    assert not isinstance(result, ExactResult)
+    assert isinstance(result, UnsolvedResult)
     assert "absolute values" in result.reason
     assert "domain" in result.reason
 

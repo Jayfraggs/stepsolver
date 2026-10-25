@@ -22,6 +22,7 @@ from stepsolver.results import (
     MappingValue,
     MathValue,
     NoSolutionValue,
+    NumericRootsValue,
     ScalarValue,
     SequenceValue,
     SolutionDomain,
@@ -449,6 +450,11 @@ def format_latex_value(value: MathValue) -> str:
             excluded = ", ".join(format_latex_expression(item) for item in value.exclusions)
             return rf"{result}\text{{ except }}{excluded}"
         return result
+    if isinstance(value, NumericRootsValue):
+        if len(value.roots) == 1:
+            return format_latex_expression(value.roots[0])
+        roots = ", ".join(format_latex_expression(root) for root in value.roots)
+        return rf"\left[{roots}\right]"
     rows = r" \\ ".join(
         " & ".join(format_latex_expression(item) for item in row) for row in value.rows
     )

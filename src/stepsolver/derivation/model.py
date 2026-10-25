@@ -76,6 +76,7 @@ class BackendNewtonIterations:
 
     variable: sp.Symbol
     values: tuple[sp.Basic, ...]
+    digits: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -84,6 +85,7 @@ class BackendApproximateSolutions:
 
     variable: sp.Symbol
     roots: tuple[sp.Basic, ...]
+    digits: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -93,9 +93,26 @@ explicit-preview-rules = false
     "raw-string-in-exception",
     "too-many-branches",
 ]
+"src/stepsolver/solver.py" = [
+    "raise-vanilla-args",
+    "raw-string-in-exception",
+    "redundant-numeric-union",
+]
 "src/stepsolver/sympy_backend.py" = [
+    "raise-vanilla-args",
+    "raw-string-in-exception",
     "too-many-locals",
     "too-many-return-statements",
+]
+"src/stepsolver/sympy_numeric.py" = [
+    "complex-structure",
+    "f-string-in-exception",
+    "magic-value-comparison",
+    "raise-vanilla-args",
+    "raw-string-in-exception",
+    "too-many-arguments",
+    "too-many-branches",
+    "too-many-locals",
 ]
 "src/stepsolver/sympy_conversion.py" = [
     "complex-structure",

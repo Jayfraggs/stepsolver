@@ -101,6 +101,30 @@ for step in payload.steps:
 
 `payload.as_dict()` returns standard Python containers suitable for JSON serialization.
 
+### Numerical root finding
+
+`Solver.nsolve` is the explicit real-domain numerical root finder. Pass an equation or a residual and a variable; a starting guess is optional for polynomials, but required for a general transcendental equation.
+
+```python
+from stepsolver import NumericResult, Solver, format_expression
+
+result = Solver().nsolve("cos(x) = x", var="x", guess=0.7)
+
+assert isinstance(result, NumericResult)
+print(format_expression(result.value.roots[0]))
+print(result.value.tolerance)
+for step in result.steps:
+    print(step.rule, step.explanation)
+```
+
+The first-class query form is equivalent:
+
+```python
+result = Solver().solve("nsolve(cos(x) = x, x, 0.7)")
+```
+
+`guess` may be an integer, float, exact fraction, or numeric string. Without a guess, a polynomial residual uses real-root isolation; a general transcendental residual returns an `UnsolvedResult` that asks for a guess. The numerical path solves over the real domain only, rejects complex candidates, verifies every returned root by substitution, uses a residual tolerance of `1e-12`, and bounds Newton's method to 50 iterations. Results carry a `NumericRootsValue` with the tolerance and a `NumericResult` with the method and residuals. `Solver.solve(...)` keeps its existing symbolic behavior; use `nsolve` when a decimal answer is intended.
+
 ### Parse first, solve later
 
 The parser produces StepSolver's own immutable AST. A parsed `Query` can be inspected, stored, or passed to a solver.
@@ -137,6 +161,7 @@ The main abstractions are:
 | Orchestration | `Solver` | Accept source text or a parsed query and invoke an engine |
 | Engine boundary | `SymbolicBackend`, `SympyBackend` | Isolate symbolic computation behind a typed protocol |
 | Domain result | `SolveResult`, `SolutionStep`, `StepNote` | Return answers, derivations, explanations, and verification |
+| Numerical result | `NumericResult`, `NumericRootsValue` | Carry approximate real roots, residuals, and tolerance |
 | Presentation | `solve_payload`, `SolvePayload`, `StepPayload` | Render the same result as frontend-ready ASCII and LaTeX |
 
 ## Syntax
@@ -157,7 +182,7 @@ single-letter abstract functions such as `f(x)`.
 | Transforms | `laplace`, `inverse_laplace`, `fourier`, `inverse_fourier` |
 | Differential equations and recurrences | `dsolve`, `rsolve` |
 | Number theory | `gcd`, `lcm`, `is_prime`, `prime_factors`, `binomial` |
-| Numerical work | `numeric` |
+| Numerical work | `numeric`, `nsolve` |
 
 Contour integrals use an explicit parameterized path:
 

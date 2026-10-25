@@ -3,6 +3,7 @@
 import sympy as sp
 
 from stepsolver.ast import (
+    ApproximateNumber,
     BinaryExpression,
     BinaryOperator,
     Expression,
@@ -178,7 +179,7 @@ class SympyDerivationRenderer:
                 name=Identifier("newton_iterations"),
                 arguments=(
                     self._converter.from_sympy(value.variable),
-                    *(self._converter.from_sympy(item) for item in value.values),
+                    *(self._approximate_expression(item, value.digits) for item in value.values),
                 ),
             )
         if isinstance(value, BackendApproximateSolutions):
@@ -186,7 +187,7 @@ class SympyDerivationRenderer:
                 name=Identifier("approximate_solutions"),
                 arguments=(
                     self._converter.from_sympy(value.variable),
-                    *(self._converter.from_sympy(root) for root in value.roots),
+                    *(self._approximate_expression(root, value.digits) for root in value.roots),
                 ),
             )
         if isinstance(value, BackendSigma):
@@ -333,4 +334,17 @@ class SympyDerivationRenderer:
             return SequenceExpression(
                 items=tuple(self._converter.from_sympy(item) for item in value)
             )
+        return self._converter.from_sympy(value)
+
+    def _approximate_expression(
+        self,
+        value: sp.Basic,
+        digits: int | None,
+    ) -> Expression:
+        """Render numerical iterates without backend precision padding."""
+        if digits is not None and isinstance(value, sp.Float):
+            text = str(sp.N(value, digits))
+            if "e" not in text.lower() and "." in text:
+                text = text.rstrip("0").rstrip(".")
+            return ApproximateNumber(text="0" if text in {"", "-0"} else text)
         return self._converter.from_sympy(value)

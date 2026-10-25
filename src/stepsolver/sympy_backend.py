@@ -30,6 +30,8 @@ from stepsolver.results import (
     DivergentResult,
     ExactResult,
     NoSolutionValue,
+    NumericResult,
+    NumericRootsValue,
     SolutionDomain,
     SolutionStep,
     SolveResult,
@@ -44,6 +46,7 @@ from stepsolver.results import (
 from stepsolver.sympy_contours import ContourExpression, evaluate_rational_circle
 from stepsolver.sympy_conversion import SympyConverter, unsupported_function_name
 from stepsolver.sympy_execution import SympyExecutor
+from stepsolver.sympy_numeric import solve_numeric
 from stepsolver.sympy_rendering import SympyDerivationRenderer
 from stepsolver.sympy_steps import SympyStepBuilder, domain_denominators
 from stepsolver.sympy_support import (
@@ -121,6 +124,8 @@ class SympyBackend:
         precheck = self._precheck_result(query)
         if precheck is not None:
             return precheck
+        if query.operation is Operation.NSOLVE:
+            return self._solve_numeric(query)
         backend_value = self._executor.execute(query)
         integral_domain_reason = self._integral_domain_reason(query, backend_value)
         if integral_domain_reason is not None:
@@ -178,6 +183,49 @@ class SympyBackend:
             verification=self._verifier.verify_result(query, backend_value),
         )
         return ExactResult(query=query, value=value, steps=(step,))
+
+    def _solve_numeric(self, query: Query) -> SolveResult:
+        """Solve a real numerical root problem with a verified Newton derivation."""
+        expect_arity(query, 2, 3)
+        equation_expression, variable_expression, *remaining = query.arguments
+        variable = expect_symbol(variable_expression, role="numerical solve variable")
+        backend_variable = self._converter.to_sympy(variable)
+        if not isinstance(backend_variable, sp.Symbol):
+            raise QueryError("nsolve requires a single variable symbol")
+        original: sp.Basic
+        residual: sp.Basic
+        if isinstance(equation_expression, Relation):
+            if equation_expression.operator is not RelationOperator.EQUAL:
+                raise QueryError("nsolve requires an equation or a residual expression")
+            backend_equation = self._converter.to_sympy(equation_expression)
+            if not isinstance(backend_equation, sp.Equality):
+                raise QueryError("nsolve could not interpret the supplied equation")
+            original = backend_equation
+            residual = backend_equation.lhs - backend_equation.rhs
+            from_equation = True
+        else:
+            original = self._converter.to_sympy(equation_expression)
+            residual = original
+            from_equation = False
+        guess = self._converter.to_sympy(remaining[0]) if remaining else None
+        numeric = solve_numeric(
+            original=original,
+            residual=residual,
+            variable=backend_variable,
+            guess=guess,
+            from_equation=from_equation,
+        )
+        steps = tuple(self._renderer.solution_step(step) for step in numeric.steps)
+        if not numeric.roots:
+            return ExactResult(query=query, value=NoSolutionValue(), steps=steps)
+        roots = tuple(ApproximateNumber(text=root.display) for root in numeric.roots)
+        return NumericResult(
+            query=query,
+            value=NumericRootsValue(roots=roots, tolerance=numeric.tolerance),
+            steps=steps,
+            method=numeric.method,
+            residuals=tuple(float(str(root.residual)) for root in numeric.roots),
+        )
 
     def _precheck_result(self, query: Query) -> SolveResult | None:
         """Handle validation and undefined cases before backend execution."""

@@ -24,6 +24,8 @@ from stepsolver.results import (
     MappingValue,
     MathValue,
     NoSolutionValue,
+    NumericResult,
+    NumericRootsValue,
     ScalarValue,
     SequenceValue,
     SolutionDomain,
@@ -169,6 +171,10 @@ def format_value(value: MathValue) -> str:
             excluded = ", ".join(format_expression(item) for item in value.exclusions)
             return f"{result} except {excluded}"
         return result
+    if isinstance(value, NumericRootsValue):
+        if len(value.roots) == 1:
+            return format_expression(value.roots[0])
+        return f"[{', '.join(format_expression(root) for root in value.roots)}]"
     rows = ", ".join(
         f"[{', '.join(format_expression(item) for item in row)}]" for row in value.rows
     )
@@ -195,6 +201,14 @@ def format_ascii(result: SolveResult) -> str:
         )
     if isinstance(result, ExactResult):
         lines.append(f"Result: {format_value(result.value)}")
+    elif isinstance(result, NumericResult):
+        lines.extend(
+            (
+                f"Result: {format_value(result.value)}",
+                f"Numerical method: {result.method}",
+                f"Residual tolerance: {result.value.tolerance:g}",
+            )
+        )
     elif isinstance(result, DivergentResult):
         lines.append(f"Diverges: {result.reason}")
     elif isinstance(result, UndefinedResult):
