@@ -3,6 +3,7 @@
 import sympy as sp
 
 from stepsolver.ast import (
+    ApproximateNumber,
     BinaryExpression,
     BinaryOperator,
     Constant,
@@ -10,14 +11,18 @@ from stepsolver.ast import (
     Expression,
     FunctionCall,
     Identifier,
+    Number,
+    OpaqueExpression,
     Operation,
     Query,
     Relation,
+    RelationOperator,
     SequenceExpression,
     Symbol,
     UnaryExpression,
     UnaryOperator,
 )
+from stepsolver.derivation.equations_support import original_denominator_restrictions
 from stepsolver.derivation.sums import find_undefined_summation
 from stepsolver.errors import BackendError, QueryError
 from stepsolver.results import (
@@ -25,10 +30,13 @@ from stepsolver.results import (
     DivergentResult,
     ExactResult,
     NoSolutionValue,
+    SolutionDomain,
     SolutionStep,
     SolveResult,
+    StepConstraint,
     StepNote,
     UndefinedResult,
+    UniversalSolutionValue,
     UnsolvedResult,
     Verification,
     VerificationMethod,
@@ -37,7 +45,7 @@ from stepsolver.sympy_contours import ContourExpression, evaluate_rational_circl
 from stepsolver.sympy_conversion import SympyConverter, unsupported_function_name
 from stepsolver.sympy_execution import SympyExecutor
 from stepsolver.sympy_rendering import SympyDerivationRenderer
-from stepsolver.sympy_steps import SympyStepBuilder
+from stepsolver.sympy_steps import SympyStepBuilder, domain_denominators
 from stepsolver.sympy_support import (
     contains_unevaluated_operation,
     expect_arity,
@@ -114,12 +122,7 @@ class SympyBackend:
         if precheck is not None:
             return precheck
         backend_value = self._executor.execute(query)
-        integral_domain_reason = self._integral_domain_reason(
-            query,
-            antiderivative_has_logarithm=(
-                isinstance(backend_value, sp.Basic) and backend_value.has(sp.log)
-            ),
-        )
+        integral_domain_reason = self._integral_domain_reason(query, backend_value)
         if integral_domain_reason is not None:
             return UnsolvedResult(query=query, reason=integral_domain_reason, steps=())
         detailed_steps = self._steps.detailed_steps(query, backend_value)
@@ -183,13 +186,19 @@ class SympyBackend:
         unsupported_reason = self._unsupported_function_reason(query)
         if unsupported_reason is not None:
             return UnsolvedResult(query=query, reason=unsupported_reason, steps=())
-        identity_reason = self._identity_equation_reason(query)
-        if identity_reason is not None:
-            return UnsolvedResult(query=query, reason=identity_reason, steps=())
         undefined_sum = self._undefined_sum_result(query)
         if undefined_sum is not None:
             return undefined_sum
-        return self._undefined_division_result(query)
+        undefined_division = self._undefined_division_result(query)
+        if undefined_division is not None:
+            return undefined_division
+        identity_result = self._identity_equation_result(query)
+        if identity_result is not None:
+            return identity_result
+        identity_reason = self._identity_equation_reason(query)
+        if identity_reason is not None:
+            return UnsolvedResult(query=query, reason=identity_reason, steps=())
+        return None
 
     @staticmethod
     def _unsupported_function_reason(query: Query) -> str | None:
@@ -399,16 +408,11 @@ class SympyBackend:
             )
         return None
 
-    def _integral_domain_reason(
-        self,
-        query: Query,
-        *,
-        antiderivative_has_logarithm: bool,
-    ) -> str | None:
+    def _integral_domain_reason(self, query: Query, backend_value: object) -> str | None:
         if query.operation is not Operation.INTEGRATE or len(query.arguments) != _EQUATION_ARITY:
             return None
         variable_node = query.arguments[1]
-        if not isinstance(variable_node, Symbol):
+        if not isinstance(variable_node, Symbol) or not isinstance(backend_value, sp.Basic):
             return None
         integrand = self._converter.to_sympy(query.arguments[0])
         variable = self._converter.to_sympy(variable_node)
@@ -423,13 +427,143 @@ class SympyBackend:
         if not is_object_sequence(roots):
             return None
         has_real_pole = any(isinstance(root, sp.Basic) and root.is_real is True for root in roots)
-        if not has_real_pole or not antiderivative_has_logarithm:
+        logarithms = backend_value.atoms(sp.log)
+        if not has_real_pole or not logarithms:
+            return None
+        if all(logarithm.has(sp.Abs) for logarithm in logarithms):
             return None
         return (
             "This antiderivative requires logarithms of absolute values and explicit domain "
             "intervals around real poles. The current result model cannot represent those "
             "domain conditions safely yet."
         )
+
+    def _identity_equation_result(self, query: Query) -> ExactResult | None:
+        """Return an exact universal solution when the original equation is an identity."""
+        if query.operation is not Operation.SOLVE or len(query.arguments) != _EQUATION_ARITY:
+            return None
+        equation_expression, variable_expression = query.arguments
+        if (
+            not isinstance(equation_expression, Relation)
+            or equation_expression.operator is not RelationOperator.EQUAL
+            or not isinstance(variable_expression, Symbol)
+            or not self._identity_domain_supported(equation_expression)
+        ):
+            return None
+        equation = self._converter.to_sympy(equation_expression)
+        variable = self._converter.to_sympy(variable_expression)
+        if not isinstance(equation, sp.Equality) or not isinstance(variable, sp.Symbol):
+            return None
+        if not equation.free_symbols <= {variable}:
+            return None
+        difference = sp.simplify(equation.lhs - equation.rhs)
+        if difference != sp.Integer(0):
+            return None
+        denominator_expressions = domain_denominators(equation_expression)
+        denominators = tuple(
+            self._converter.to_sympy(denominator) for denominator in denominator_expressions
+        )
+        restrictions = original_denominator_restrictions(denominators, variable)
+        exclusions = tuple(
+            self._converter.from_sympy(value) for value in restrictions.excluded_values
+        )
+        constraints = tuple(
+            StepConstraint(
+                explanation=item.explanation,
+                expression=self._renderer.derivation_expression(item.expression),
+            )
+            for item in restrictions.displayed
+        )
+        zero = self._converter.from_sympy(sp.Integer(0))
+        zero_equation = Relation(
+            operator=RelationOperator.EQUAL,
+            left=zero,
+            right=zero,
+        )
+        conclusion = FunctionCall(
+            name=Identifier("all_real"),
+            arguments=(variable_expression,),
+        )
+        domain_qualifier = (
+            " The original denominators must stay nonzero, so the stated exclusions remain "
+            "outside the domain."
+            if constraints
+            else ""
+        )
+        return ExactResult(
+            query=query,
+            value=UniversalSolutionValue(
+                domain=SolutionDomain.REAL,
+                exclusions=exclusions,
+            ),
+            steps=(
+                SolutionStep(
+                    rule="Subtract matching sides",
+                    before=equation_expression,
+                    after=zero_equation,
+                    explanation=(
+                        "Subtract the right side from both sides. The two sides are identical "
+                        f"wherever the equation is defined, leaving 0 = 0.{domain_qualifier}"
+                    ),
+                    verification=Verification(
+                        method=VerificationMethod.BACKEND_IDENTITY,
+                        detail=(
+                            "Exact symbolic simplification of the difference between both sides "
+                            "gives zero."
+                        ),
+                    ),
+                    introduced_constraints=constraints,
+                ),
+                SolutionStep(
+                    rule="Conclude every admissible real value is a solution",
+                    before=zero_equation,
+                    after=conclusion,
+                    explanation=(
+                        "The identity 0 = 0 holds for every admissible real value, so every "
+                        "admissible real value is a solution."
+                    ),
+                    verification=Verification(
+                        method=VerificationMethod.SOLUTION_SET_EQUIVALENCE,
+                        detail=(
+                            "The reduced identity holds for every value allowed by the domain "
+                            "restrictions."
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _identity_domain_supported(expression: object) -> bool:
+        """Limit universal answers to expressions whose real domain is denominator-only."""
+        if isinstance(expression, Number | Symbol):
+            return True
+        if isinstance(expression, ApproximateNumber | OpaqueExpression):
+            return False
+        if isinstance(expression, Constant):
+            return expression.name is not ConstantName.INFINITY
+        if isinstance(expression, UnaryExpression):
+            return (
+                expression.operator is not UnaryOperator.FACTORIAL
+                and SympyBackend._identity_domain_supported(expression.operand)
+            )
+        if isinstance(expression, BinaryExpression):
+            if expression.operator is BinaryOperator.POWER and not (
+                isinstance(expression.right, Number) and expression.right.value.denominator == 1
+            ):
+                return False
+            return SympyBackend._identity_domain_supported(
+                expression.left
+            ) and SympyBackend._identity_domain_supported(expression.right)
+        if isinstance(expression, FunctionCall):
+            return False
+        if isinstance(expression, Relation):
+            return SympyBackend._identity_domain_supported(
+                expression.left
+            ) and SympyBackend._identity_domain_supported(expression.right)
+        if isinstance(expression, SequenceExpression):
+            return all(SympyBackend._identity_domain_supported(item) for item in expression.items)
+        return False
 
     def _identity_equation_reason(self, query: Query) -> str | None:
         if query.operation is not Operation.SOLVE or len(query.arguments) != _EQUATION_ARITY:
@@ -442,10 +576,14 @@ class SympyBackend:
         )
         if difference != sp.Integer(0):
             return None
+        if equation.operator is not RelationOperator.EQUAL:
+            return (
+                "This relation compares identical expressions. Its truth set may be universal "
+                "or empty, and StepSolver cannot yet represent it safely."
+            )
         return (
-            "This equation is true for every value in its domain. The current result model "
-            "cannot yet represent a universal solution set together with possible domain "
-            "exclusions."
+            "This equation is an identity, but StepSolver cannot yet represent its full "
+            "real-domain conditions safely. It has not been reported as all real numbers."
         )
 
     def _solve_contour(self, query: Query) -> SolveResult:

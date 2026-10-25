@@ -319,6 +319,11 @@ class SympyConverter:
                 name=Identifier("abs"),
                 arguments=(self.from_sympy(value.args[0]),),
             )
+        if value.func == sp.log and len(value.args) == 1:
+            return FunctionCall(
+                name=Identifier("log"),
+                arguments=(self.from_sympy(value.args[0]),),
+            )
         if value.func == sp.Add and value.has(integration_constant):
             nonconstant_terms = tuple(term for term in value.args if term != integration_constant)
             if nonconstant_terms and all(

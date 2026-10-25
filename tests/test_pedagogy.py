@@ -1,8 +1,18 @@
 """Regression matrix for student-first method selection and mathematical display."""
 
 import pytest
+import sympy as sp
 
-from stepsolver import ExactResult, Solver, format_latex_expression
+from stepsolver import (
+    ExactResult,
+    ScalarValue,
+    Solver,
+    format_ascii,
+    format_expression,
+    format_latex_expression,
+    format_latex_value,
+)
+from stepsolver.sympy_conversion import SympyConverter
 
 
 @pytest.fixture
@@ -241,16 +251,104 @@ def test_quadratic_formula_keeps_fraction_structure(solver: Solver) -> None:
     assert r"\cdot \left(\frac{1}{2}\right)" not in rendered
 
 
-@pytest.mark.parametrize("query", ["integrate(1/x,x)", "integrate(1/(x^2-1),x)"])
-def test_domain_sensitive_logarithmic_integrals_are_not_faked(
+def test_reciprocal_integral_uses_absolute_value_and_preserves_the_pole(
+    solver: Solver,
+) -> None:
+    """A reciprocal should integrate to a real logarithm on both sides of zero."""
+    result = solver.solve("integrate(1/x,x)")
+    assert isinstance(result, ExactResult)
+    assert isinstance(result.value, ScalarValue)
+    assert tuple(step.rule for step in result.steps) == (
+        "Substitute the linear denominator",
+        "Use the logarithmic rule for nonzero inputs",
+        "Substitute back",
+    )
+    assert format_ascii(result).endswith("Result: log(abs(x)) + C")
+    assert format_latex_value(result.value) == r"\log\left(\left|x\right|\right) + C"
+    constraints = result.steps[0].introduced_constraints
+    assert tuple(format_expression(item.expression) for item in constraints) == ("x != 0",)
+    assert "absolute value" in result.steps[1].explanation
+    assert all(step.rule != "Compute exact result" for step in result.steps)
+
+
+def test_reciprocal_antiderivative_is_real_and_differentiates_away_from_zero(
+    solver: Solver,
+) -> None:
+    """The displayed antiderivative must recover 1/x on both real intervals."""
+    result = solver.solve("integrate(1/x,x)")
+    assert isinstance(result, ExactResult)
+    assert isinstance(result.value, ScalarValue)
+    x = sp.Symbol("x", real=True)
+    constant = sp.Symbol("C")
+    antiderivative = SympyConverter().to_sympy(result.value.expression)
+    derivative = sp.diff(antiderivative, x)
+    for point in (
+        sp.Integer(-4),
+        sp.Rational(-1, 2),
+        sp.Rational(1, 2),
+        sp.Integer(4),
+    ):
+        assert antiderivative.subs(x, point).subs(constant, sp.Integer(0)).is_real is True
+        assert sp.simplify(derivative.subs(x, point) - 1 / point) == sp.Integer(0)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected", "expected_constraints"),
+    [
+        (
+            "integrate(1/(x+1),x)",
+            "log(abs(x + 1)) + C",
+            ("x + 1 != 0", "x != -1"),
+        ),
+        (
+            "integrate(1/(2*x+1),x)",
+            "log(abs(2 * x + 1)) / 2 + C",
+            ("2 * x + 1 != 0", "x != -1/2"),
+        ),
+    ],
+)
+def test_reciprocal_integral_handles_shifted_linear_denominators(
     solver: Solver,
     query: str,
+    expected: str,
+    expected_constraints: tuple[str, ...],
 ) -> None:
-    """Real poles require absolute values and interval-aware domain information."""
+    """A shifted reciprocal should retain its coefficient, root, and pole."""
     result = solver.solve(query)
+    assert isinstance(result, ExactResult)
+    assert format_ascii(result).endswith(f"Result: {expected}")
+    constraints = result.steps[0].introduced_constraints
+    assert tuple(format_expression(item.expression) for item in constraints) == expected_constraints
+
+
+def test_general_rational_logarithmic_integrals_with_multiple_poles_are_still_declined(
+    solver: Solver,
+) -> None:
+    """A partial-fraction result with several poles is not faked as a one-log answer."""
+    result = solver.solve("integrate(1/(x^2-1),x)")
     assert not isinstance(result, ExactResult)
     assert "absolute values" in result.reason
     assert "domain" in result.reason
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("integrate(3*x^2,x)", "x ^ 3 + C"),
+        ("integrate(2*x+5,x)", "x ^ 2 + 5 * x + C"),
+        ("integrate(cos(x),x)", "sin(x) + C"),
+    ],
+)
+def test_reciprocal_rule_does_not_change_nearby_integrals(
+    solver: Solver,
+    query: str,
+    expected: str,
+) -> None:
+    """The reciprocal specialization should not intercept unrelated elementary integrals."""
+    result = solver.solve(query)
+    assert isinstance(result, ExactResult)
+    assert format_ascii(result).endswith(f"Result: {expected}")
+    assert all(step.rule != "Compute exact result" for step in result.steps)
 
 
 @pytest.mark.parametrize(

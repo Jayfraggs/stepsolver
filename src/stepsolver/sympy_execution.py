@@ -11,7 +11,10 @@ from stepsolver.ast import (
 )
 from stepsolver.errors import BackendError, QueryError
 from stepsolver.sympy_conversion import SympyConverter
-from stepsolver.sympy_integrals import match_sine_square_root_integral
+from stepsolver.sympy_integrals import (
+    match_reciprocal_linear_integral,
+    match_sine_square_root_integral,
+)
 from stepsolver.sympy_series import match_alternating_p_series, match_harmonic_sine_series
 from stepsolver.sympy_support import (
     expect_arity,
@@ -28,6 +31,10 @@ def _evaluate_indefinite_integral(
     variable: sp.Basic,
 ) -> sp.Basic:
     integration_constant = sp.Symbol("C")
+    if isinstance(variable, sp.Symbol):
+        reciprocal_linear = match_reciprocal_linear_integral(integrand, variable)
+        if reciprocal_linear is not None:
+            return reciprocal_linear.result
     antiderivative = sp.integrate(integrand, variable)
     if isinstance(variable, sp.Symbol):
         sine_square = sp.sin(variable) ** 2

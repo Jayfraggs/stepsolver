@@ -24,6 +24,8 @@ from stepsolver.results import (
     NoSolutionValue,
     ScalarValue,
     SequenceValue,
+    SolutionDomain,
+    UniversalSolutionValue,
 )
 
 _PRECEDENCE: dict[BinaryOperator, int] = {
@@ -273,8 +275,11 @@ def _format_function(expression: FunctionCall) -> str:
         and arguments[0].value == 0
     ):
         return rf"\psi\left({format_latex_expression(arguments[1])}\right)"
-    if name == "abs" and len(arguments) == 1:
+    if name in {"abs", "Abs"} and len(arguments) == 1:
         return rf"\left|{format_latex_expression(arguments[0])}\right|"
+    if name == "all_real" and len(arguments) == 1:
+        variable = format_latex_expression(arguments[0])
+        return rf"{variable} \in \mathbb{{R}}"
     if name == "differential" and len(arguments) == 1:
         return rf"\mathrm{{d}}{format_latex_expression(arguments[0])}"
     if name == "evaluate_at_bounds" and len(arguments) == 4:
@@ -437,6 +442,13 @@ def format_latex_value(value: MathValue) -> str:
             for entry in value.entries
         )
         return rf"\left\{{{entries}\right\}}"
+    if isinstance(value, UniversalSolutionValue):
+        domain = r"\mathbb{R}" if value.domain is SolutionDomain.REAL else r"\mathbb{C}"
+        result = rf"\text{{all values in }}{domain}"
+        if value.exclusions:
+            excluded = ", ".join(format_latex_expression(item) for item in value.exclusions)
+            return rf"{result}\text{{ except }}{excluded}"
+        return result
     rows = r" \\ ".join(
         " & ".join(format_latex_expression(item) for item in row) for row in value.rows
     )

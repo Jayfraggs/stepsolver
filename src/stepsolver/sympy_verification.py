@@ -12,7 +12,12 @@ from stepsolver.results import (
     VerificationMethod,
 )
 from stepsolver.sympy_conversion import SympyConverter
-from stepsolver.sympy_support import expect_integer
+from stepsolver.sympy_support import (
+    expect_integer,
+    negative_condition,
+    positive_condition,
+    refine_expression,
+)
 
 
 class SympyVerifier:
@@ -63,10 +68,29 @@ class SympyVerifier:
         if operation is Operation.INTEGRATE and len(query.arguments) == 2:
             if not isinstance(backend_value, sp.Basic):
                 raise BackendError("antiderivative verification requires a scalar result")
-            derivative = sp.diff(backend_value, self._converter.to_sympy(query.arguments[1]))
-            difference = sp.simplify(derivative - self._converter.to_sympy(query.arguments[0]))
+            variable = self._converter.to_sympy(query.arguments[1])
+            integrand = self._converter.to_sympy(query.arguments[0])
+            derivative = sp.diff(backend_value, variable)
+            difference = sp.simplify(derivative - integrand)
             if str(difference) != "0":
-                raise BackendError("the antiderivative failed differentiation verification")
+                if not (
+                    isinstance(variable, sp.Symbol)
+                    and variable.is_real is True
+                    and self._differentiates_away_from_real_poles(
+                        difference,
+                        integrand,
+                        backend_value,
+                        variable,
+                    )
+                ):
+                    raise BackendError("the antiderivative failed differentiation verification")
+                return Verification(
+                    method=VerificationMethod.DIFFERENTIATION,
+                    detail=(
+                        "Differentiating the result recovers the integrand on both real "
+                        "intervals separated by the excluded value."
+                    ),
+                )
             return Verification(
                 method=VerificationMethod.DIFFERENTIATION,
                 detail="Differentiating the result recovered the original integrand.",
@@ -87,4 +111,26 @@ class SympyVerifier:
         return Verification(
             method=VerificationMethod.BACKEND_IDENTITY,
             detail="The exact operation completed and crossed the validated typed boundary.",
+        )
+
+    @staticmethod
+    def _differentiates_away_from_real_poles(
+        difference: sp.Basic,
+        integrand: sp.Basic,
+        backend_value: sp.Basic,
+        variable: sp.Symbol,
+    ) -> bool:
+        """Check an absolute-value antiderivative on both sides of its real poles."""
+        if not backend_value.has(sp.Abs):
+            return False
+        _numerator, denominator = sp.fraction(sp.together(integrand))
+        conditions: list[object] = []
+        if denominator.has(variable):
+            conditions.extend((positive_condition(denominator), negative_condition(denominator)))
+        for absolute in backend_value.atoms(sp.Abs):
+            if absolute.has(variable):
+                conditions.extend((positive_condition(absolute), negative_condition(absolute)))
+        return bool(conditions) and all(
+            sp.simplify(refine_expression(difference, condition)) == sp.Integer(0)
+            for condition in conditions
         )

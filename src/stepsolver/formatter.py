@@ -26,8 +26,10 @@ from stepsolver.results import (
     NoSolutionValue,
     ScalarValue,
     SequenceValue,
+    SolutionDomain,
     SolveResult,
     UndefinedResult,
+    UniversalSolutionValue,
 )
 
 _PRECEDENCE: dict[BinaryOperator, int] = {
@@ -71,6 +73,10 @@ def _format_function_call(expression: FunctionCall, *, parent_precedence: int) -
             return f"{format_expression(operand, parent_precedence=40)}!"
         case "polygamma", (order, argument) if format_expression(order) == "0":
             return f"digamma({format_expression(argument)})"
+        case "all_real", (variable,):
+            return f"all real {format_expression(variable)}"
+        case "abs" | "Abs", (argument,):
+            return f"abs({format_expression(argument)})"
         case _:
             arguments = ", ".join(format_expression(item) for item in expression.arguments)
             return f"{expression.name}({arguments})"
@@ -156,6 +162,13 @@ def format_value(value: MathValue) -> str:
             for entry in value.entries
         )
         return f"{{{entries}}}"
+    if isinstance(value, UniversalSolutionValue):
+        domain = "real" if value.domain is SolutionDomain.REAL else "complex"
+        result = f"all {domain} numbers"
+        if value.exclusions:
+            excluded = ", ".join(format_expression(item) for item in value.exclusions)
+            return f"{result} except {excluded}"
+        return result
     rows = ", ".join(
         f"[{', '.join(format_expression(item) for item in row)}]" for row in value.rows
     )

@@ -37,6 +37,7 @@ from stepsolver.derivation.integrals_elementary import (
     derive_log_derivative_integral,
     derive_polynomial_sum_integral,
 )
+from stepsolver.derivation.integrals_reciprocal import derive_reciprocal_linear_integral
 from stepsolver.derivation.integrals_special import (
     derive_gaussian_antiderivative,
     derive_integration_by_parts,
@@ -93,6 +94,7 @@ def _derive_indefinite_integral(
 ) -> tuple[BackendDerivationStep, ...]:
     strategies = (
         derive_basic_antiderivative,
+        derive_reciprocal_linear_integral,
         derive_log_derivative_integral,
         derive_polynomial_sum_integral,
         derive_constant_multiple_integral,
@@ -118,10 +120,10 @@ def _derive_indefinite_integral(
     return ()
 
 
-def _domain_denominators(expression: Expression) -> tuple[Expression, ...]:
+def domain_denominators(expression: Expression) -> tuple[Expression, ...]:
     """Collect denominator expressions whose zeros are outside the input domain."""
     if isinstance(expression, BinaryExpression):
-        nested = _domain_denominators(expression.left) + _domain_denominators(expression.right)
+        nested = domain_denominators(expression.left) + domain_denominators(expression.right)
         if expression.operator is BinaryOperator.DIVIDE:
             return (expression.right, *nested)
         if (
@@ -132,10 +134,10 @@ def _domain_denominators(expression: Expression) -> tuple[Expression, ...]:
             return (expression.left, *nested)
         return nested
     if isinstance(expression, Relation):
-        return _domain_denominators(expression.left) + _domain_denominators(expression.right)
+        return domain_denominators(expression.left) + domain_denominators(expression.right)
     if isinstance(expression, SequenceExpression):
         return tuple(
-            denominator for item in expression.items for denominator in _domain_denominators(item)
+            denominator for item in expression.items for denominator in domain_denominators(item)
         )
     return ()
 
@@ -352,15 +354,15 @@ class SympyStepBuilder:
                 roots,
             )
             if not derivation:
-                domain_denominators = tuple(
+                denominators = tuple(
                     self._converter.to_sympy(item)
-                    for item in _domain_denominators(equation_expression)
+                    for item in domain_denominators(equation_expression)
                 )
                 derivation = derive_polynomial_equation(
                     equation,
                     variable,
                     roots,
-                    domain_denominators,
+                    denominators,
                 )
         except (sp.PolynomialError, TypeError, ValueError):
             return ()

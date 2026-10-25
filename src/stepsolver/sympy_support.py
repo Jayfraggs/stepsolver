@@ -1,7 +1,7 @@
 """Shared validation and structural helpers for the SymPy adapter."""
 
-from collections.abc import Mapping, Sequence
-from typing import TypeGuard
+from collections.abc import Callable, Mapping, Sequence
+from typing import Protocol, TypeGuard, cast
 
 import sympy as sp
 
@@ -31,6 +31,33 @@ _UNEVALUATED_OPERATION_TYPES: frozenset[tuple[str, str]] = frozenset(
         ("sympy.series.limits", "Limit"),
     }
 )
+
+
+class _AssumptionPredicates(Protocol):
+    """The assumption predicates used by interval-aware verification."""
+
+    def positive(self, expression: sp.Basic) -> object: ...
+
+    def negative(self, expression: sp.Basic) -> object: ...
+
+
+_Q = cast("_AssumptionPredicates", vars(sp)["Q"])
+_REFINE = cast("Callable[[sp.Basic, object], sp.Basic]", vars(sp)["refine"])
+
+
+def positive_condition(expression: sp.Basic) -> object:
+    """Return the real-positivity assumption for an expression."""
+    return _Q.positive(expression)
+
+
+def negative_condition(expression: sp.Basic) -> object:
+    """Return the real-negativity assumption for an expression."""
+    return _Q.negative(expression)
+
+
+def refine_expression(expression: sp.Basic, condition: object) -> sp.Basic:
+    """Apply SymPy's untyped assumption refinement at a typed boundary."""
+    return _REFINE(expression, condition)
 
 
 def is_object_mapping(value: object) -> TypeGuard[Mapping[object, object]]:

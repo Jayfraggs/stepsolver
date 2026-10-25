@@ -122,8 +122,29 @@ class NoSolutionValue:
     """The empty solution set for an equation or system."""
 
 
+class SolutionDomain(Enum):
+    """The ambient domain of a universal solution set."""
+
+    REAL = "real"
+    COMPLEX = "complex"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UniversalSolutionValue:
+    """Every value in a domain, except explicit domain exclusions."""
+
+    domain: SolutionDomain = SolutionDomain.REAL
+    exclusions: tuple[Expression, ...] = ()
+
+
 type MathValue = (
-    ScalarValue | SequenceValue | MappingValue | MatrixValue | BooleanValue | NoSolutionValue
+    ScalarValue
+    | SequenceValue
+    | MappingValue
+    | MatrixValue
+    | BooleanValue
+    | NoSolutionValue
+    | UniversalSolutionValue
 )
 
 

@@ -10,8 +10,10 @@ from stepsolver import (
     NoSolutionValue,
     ScalarValue,
     SequenceValue,
+    SolutionDomain,
     Solver,
     UndefinedResult,
+    UniversalSolutionValue,
     UnsolvedResult,
     format_ascii,
     format_expression,
@@ -19,6 +21,7 @@ from stepsolver import (
     parse_expression,
     solve_payload,
 )
+from stepsolver.ast import OpaqueExpression
 
 _CONTOUR_STEP_COUNT = 3
 _CROSSED_NUMERIC_FACTOR_COUNT = 4
@@ -1065,16 +1068,84 @@ def test_derivations_hide_neutral_algebra_artifacts(solver: Solver) -> None:
     assert format_latex_expression(positivity) == r"x^{2} + 1 > 0"
 
 
-@pytest.mark.parametrize("query", ["solve(x=x,x)", "solve((x-1)/(x-1)=1,x)"])
-def test_identity_equations_do_not_return_a_false_empty_set(
+@pytest.mark.parametrize(
+    ("query", "expected_exclusions"),
+    [
+        ("solve(2*x+1=2*x+1,x)", ()),
+        ("solve(x=x,x)", ()),
+        ("solve((x-1)/(x-1)=1,x)", ("1",)),
+    ],
+)
+def test_identity_equations_return_all_admissible_real_values(
+    solver: Solver,
+    query: str,
+    expected_exclusions: tuple[str, ...],
+) -> None:
+    """An identity should produce a typed universal solution with a real derivation."""
+    result = solver.solve(query)
+    assert isinstance(result, ExactResult)
+    assert isinstance(result.value, UniversalSolutionValue)
+    assert result.value.domain is SolutionDomain.REAL
+    assert tuple(format_expression(item) for item in result.value.exclusions) == expected_exclusions
+    assert tuple(step.rule for step in result.steps) == (
+        "Subtract matching sides",
+        "Conclude every admissible real value is a solution",
+    )
+    assert format_expression(result.steps[0].after) == "0 = 0"
+    assert format_expression(result.steps[-1].after) == "all real x"
+    assert format_latex_expression(result.steps[-1].after) == r"x \in \mathbb{R}"
+    assert not isinstance(result.steps[-1].after, OpaqueExpression)
+    assert "Result: all real numbers" in format_ascii(result)
+
+
+def test_domain_sensitive_identity_preserves_original_denominator_restrictions(
+    solver: Solver,
+) -> None:
+    """A universal result must still exclude every original denominator zero."""
+    result = solver.solve("solve(1/(x-1)=1/(x-1),x)")
+    assert isinstance(result, ExactResult)
+    assert isinstance(result.value, UniversalSolutionValue)
+    assert tuple(format_expression(item) for item in result.value.exclusions) == ("1",)
+    constraints = result.steps[0].introduced_constraints
+    assert tuple(format_expression(item.expression) for item in constraints) == (
+        "x - 1 != 0",
+        "x != 1",
+    )
+    payload = solve_payload(result)
+    assert payload.status == "exact"
+    assert "all real numbers except 1" in payload.formatted_ascii
+    assert payload.result_latex is not None
+    assert "except" in payload.result_latex
+    assert r"\mathbb{R}" in payload.result_latex
+
+
+def test_non_identity_equation_is_not_reported_as_all_real(solver: Solver) -> None:
+    """A contradiction with matching variable terms must stay an empty solution set."""
+    result = solver.solve("solve(2*x+1=2*x+2,x)")
+    assert isinstance(result, ExactResult)
+    assert isinstance(result.value, NoSolutionValue)
+    assert "all real numbers" not in format_ascii(result)
+
+
+def test_restricted_domain_identity_is_not_overclaimed(solver: Solver) -> None:
+    """Identities involving restricted functions must not claim every real value."""
+    result = solver.solve("solve(sqrt(x)=sqrt(x),x)")
+    assert isinstance(result, UnsolvedResult)
+    assert "identity" in result.reason
+    assert "real-domain conditions" in result.reason
+    assert "Result: all real numbers" not in format_ascii(result)
+
+
+@pytest.mark.parametrize("query", ["solve(x <= x,x)", "solve(x != x,x)"])
+def test_identical_relations_without_equality_stay_honestly_unsolved(
     solver: Solver,
     query: str,
 ) -> None:
-    """Universal identities should remain honest until domain sets are representable."""
+    """A relation comparing identical expressions is not the same case as an equation."""
     result = solver.solve(query)
     assert isinstance(result, UnsolvedResult)
-    assert "identity" not in result.reason.lower() or "domain" in result.reason.lower()
-    assert "universal solution set" in result.reason
+    assert "truth set" in result.reason
+    assert "Result: all real numbers" not in format_ascii(result)
 
 
 def test_denominator_restrictions_are_explicit_and_filter_candidates(

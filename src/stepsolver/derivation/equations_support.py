@@ -263,6 +263,14 @@ def _domain_restrictions(
     )
 
 
+def original_denominator_restrictions(
+    denominators: tuple[sp.Basic, ...],
+    variable: sp.Symbol,
+) -> DomainRestrictions:
+    """Return restrictions contributed by the original equation's denominators."""
+    return _domain_restrictions(sp.Integer(1), denominators, variable)
+
+
 def _common_denominator(
     denominator: sp.Basic,
     supplied_denominators: tuple[sp.Basic, ...],
