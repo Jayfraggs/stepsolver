@@ -144,6 +144,26 @@ def test_ode_route_checks_the_solution_family_by_substitution(solver: Solver) ->
     assert any(note.label == "Arbitrary constants" for note in result.steps[-1].notes)
 
 
+def test_j01_native_first_order_ode_input_is_supported(solver: Solver) -> None:
+    """The benchmark J01 query should work without an adapter override."""
+    result = solver.solve("dsolve(diff(y(x), x) = 3*y(x), y(x))")
+    assert isinstance(result, ExactResult)
+    assert "Result: Eq(y(x), C1 * exp(3 * x))" in format_ascii(result)
+    assert tuple(step.rule for step in result.steps) == (
+        "Identify the differential equation",
+        "Apply the classified solution method",
+        "Check the solution by substitution",
+    )
+
+
+def test_j02_native_second_order_ode_input_is_supported(solver: Solver) -> None:
+    """The benchmark J02 query should work without an adapter override."""
+    result = solver.solve("dsolve(diff(y(x), x, 2) + y(x) = 0, y(x))")
+    assert isinstance(result, ExactResult)
+    assert "Result: Eq(y(x), C1 * sin(x) + C2 * cos(x))" in format_ascii(result)
+    assert result.steps[-1].verification.method.value == "substitution"
+
+
 def test_inequality_route_shows_boundaries_and_interval_tests(solver: Solver) -> None:
     """A quadratic inequality should show the sign-chart method and its test points."""
     result = solver.solve("solve_inequality(x^2<4,x)")

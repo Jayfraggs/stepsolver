@@ -282,6 +282,8 @@ class _Parser:
                 if self._accept(_TokenKind.COMMA) is None:
                     break
             self._expect(_TokenKind.RIGHT_PAREN, "expected ')' after function arguments")
+        if name.text == "ln" and len(arguments) != 1:
+            raise ParseError("ln expects one argument", position=name.position)
         normalized_name = "log" if name.text == "ln" else name.text
         return FunctionCall(name=Identifier(normalized_name), arguments=tuple(arguments))
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from math import isqrt
 from typing import TypeGuard, cast
 
@@ -22,6 +23,7 @@ from stepsolver.derivation.model import (
     EquationBackendExpression,
 )
 from stepsolver.results import VerificationMethod
+from stepsolver.sympy_equivalence import expressions_equivalent
 
 _ROOT_VERIFICATION_DIGITS = 12
 _DISPLAY_DIGITS = 7
@@ -54,6 +56,31 @@ def _is_basic_sequence(value: object) -> TypeGuard[Sequence[sp.Basic]]:
     return all(isinstance(item, sp.Basic) for item in items)
 
 
+def _equations_are_structurally_equivalent(
+    before: EquationBackendExpression,
+    after: EquationBackendExpression,
+    variable: sp.Symbol,
+) -> bool:
+    """Recognize transformations that cannot introduce or remove candidates."""
+    if before == after:
+        return True
+    if not isinstance(before, sp.Equality) or not isinstance(after, sp.Equality):
+        return False
+    before_difference = before.lhs - before.rhs
+    after_difference = after.lhs - after.rhs
+    if not before_difference.is_polynomial(variable) or not after_difference.is_polynomial(
+        variable
+    ):
+        # Clearing or cancelling denominators can remove a domain hole, so keep
+        # the full solution-set check and its exclusions for those steps.
+        return False
+    return expressions_equivalent(
+        before_difference,
+        after_difference,
+        variable=variable,
+    )
+
+
 def equivalent_step(
     *,
     rule: str,
@@ -65,8 +92,14 @@ def equivalent_step(
     introduced_constraints: tuple[BackendStepConstraint, ...] = (),
 ) -> BackendDerivationStep:
     """Build an equation step after verifying solution-set equivalence."""
-    if solution_set(before, variable, excluded_values) != solution_set(
-        after, variable, excluded_values
+    if not _equations_are_structurally_equivalent(
+        before,
+        after,
+        variable,
+    ) and solution_set(before, variable, excluded_values) != solution_set(
+        after,
+        variable,
+        excluded_values,
     ):
         message = "a proposed derivation step changed the equation's solution set"
         raise ValueError(message)
@@ -99,8 +132,14 @@ def equivalent_display_step(
     verification_detail: str = "Both displayed forms preserve the same solution set.",
 ) -> BackendDerivationStep:
     """Build a step with separate semantic and unsimplified displays."""
-    if solution_set(semantic_before, variable, excluded_values) != solution_set(
-        semantic_after, variable, excluded_values
+    if not _equations_are_structurally_equivalent(
+        semantic_before,
+        semantic_after,
+        variable,
+    ) and solution_set(semantic_before, variable, excluded_values) != solution_set(
+        semantic_after,
+        variable,
+        excluded_values,
     ):
         message = "a proposed display step changed the equation's solution set"
         raise ValueError(message)
@@ -192,6 +231,22 @@ def rational_root_candidates(
         for sign in (-1, 1)
     }
     return tuple(sorted(candidates, key=_rational_sort_key))
+
+
+def evaluate_polynomial_at_rational(
+    polynomial: sp.Poly,
+    value: sp.Rational,
+) -> sp.Rational | None:
+    """Evaluate a rational-coefficient polynomial with exact Horner arithmetic."""
+    coefficients = polynomial.all_coeffs()
+    if not all(isinstance(coefficient, sp.Rational) for coefficient in coefficients):
+        return None
+    point = Fraction(value.p, value.q)
+    total = Fraction(0)
+    for coefficient in coefficients:
+        exact_coefficient = cast("sp.Rational", coefficient)
+        total = total * point + Fraction(exact_coefficient.p, exact_coefficient.q)
+    return sp.Rational(total.numerator, total.denominator)
 
 
 def newton_values(

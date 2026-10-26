@@ -60,6 +60,7 @@ _UNARY_FUNCTIONS: dict[str, Callable[[sp.Basic], sp.Basic]] = {
     "cosh": sp.cosh,
     "tanh": sp.tanh,
     "exp": sp.exp,
+    "ln": sp.log,
     "sqrt": sp.sqrt,
     "abs": sp.Abs,
     "factorial": sp.factorial,
@@ -306,6 +307,102 @@ class SympyConverter:
             return self.from_sympy(value)
         raise BackendError(f"unsupported mapping key type: {type(value).__name__}")
 
+    @staticmethod
+    def _is_simple_multiplicative_factor(value: sp.Basic) -> bool:
+        """Reject factors whose textual form introduces a division or rational wrapper."""
+        if isinstance(value, sp.Rational):
+            return value.q == 1
+        if isinstance(value, sp.Float):
+            return False
+        if value.func is sp.Pow:
+            exponent = value.args[1]
+            return isinstance(exponent, sp.Integer) and exponent > 0
+        if value.func is sp.Mul:
+            return all(
+                SympyConverter._is_simple_multiplicative_factor(factor)
+                for factor in value.as_ordered_factors()
+                if factor != sp.Integer(1)
+            )
+        return True
+
+    def _simple_from_sympy(self, value: sp.Basic) -> Expression | None:
+        """Convert a simple algebraic/trigonometric node without reparsing text."""
+        if isinstance(value, sp.Integer):
+            return Number(value=Fraction(int(value.p), int(value.q)))
+        if isinstance(value, sp.Rational):
+            return Number(value=Fraction(int(value.p), int(value.q)))
+        if isinstance(value, sp.Float):
+            return ApproximateNumber(text=str(value))
+        if isinstance(value, sp.Symbol):
+            return Symbol(name=Identifier(str(value)))
+        if value.func is sp.Add:
+            if value.has(sp.Symbol("C")):
+                return None
+            terms = value.as_ordered_terms()
+            if (
+                not terms
+                or any(term.could_extract_minus_sign() for term in terms)
+                or any(isinstance(term, sp.Rational) and term.q != 1 for term in terms)
+            ):
+                return None
+            expression = self.from_sympy(terms[0])
+            for term in terms[1:]:
+                expression = BinaryExpression(
+                    operator=BinaryOperator.ADD,
+                    left=expression,
+                    right=self.from_sympy(term),
+                )
+            return expression
+        if value.func is sp.Mul:
+            coefficient, _rest = value.as_coeff_Mul()
+            if not isinstance(coefficient, sp.Integer) or coefficient.is_negative is True:
+                return None
+            factors = tuple(
+                factor for factor in value.as_ordered_factors() if factor != sp.Integer(1)
+            )
+            if not factors or any(
+                not self._is_simple_multiplicative_factor(factor) for factor in factors
+            ):
+                return None
+            expression = self.from_sympy(factors[0])
+            for factor in factors[1:]:
+                expression = BinaryExpression(
+                    operator=BinaryOperator.MULTIPLY,
+                    left=expression,
+                    right=self.from_sympy(factor),
+                )
+            return expression
+        if value.func is sp.Pow:
+            base, exponent = value.args
+            if not isinstance(exponent, sp.Integer) or exponent <= 0:
+                return None
+            return BinaryExpression(
+                operator=BinaryOperator.POWER,
+                left=self.from_sympy(base),
+                right=Number(value=Fraction(int(exponent.p), int(exponent.q))),
+            )
+        functions: dict[object, str] = {
+            sp.sin: "sin",
+            sp.cos: "cos",
+            sp.tan: "tan",
+            sp.asin: "asin",
+            sp.acos: "acos",
+            sp.atan: "atan",
+            sp.sinh: "sinh",
+            sp.cosh: "cosh",
+            sp.tanh: "tanh",
+            sp.asinh: "asinh",
+            sp.exp: "exp",
+            sp.gamma: "gamma",
+        }
+        function_name = functions.get(value.func)
+        if function_name is not None and len(value.args) == 1:
+            return FunctionCall(
+                name=Identifier(function_name),
+                arguments=(self.from_sympy(value.args[0]),),
+            )
+        return None
+
     def from_sympy(self, value: sp.Basic) -> Expression:
         """Convert a SymPy scalar to the closest public AST expression."""
         integration_constant = sp.Symbol("C")
@@ -341,6 +438,9 @@ class SympyConverter:
                     left=expression,
                     right=Symbol(name=Identifier("C")),
                 )
+        simple = self._simple_from_sympy(value)
+        if simple is not None:
+            return simple
         text = re.sub(r"\bI\b", "i", str(value)).replace("**", "^")
         if (
             _INTEGER_PATTERN.fullmatch(text) is not None

@@ -26,6 +26,73 @@ from stepsolver.sympy_support import (
 )
 
 
+def _fast_basic_antiderivative(
+    expression: sp.Basic,
+    variable: sp.Symbol,
+) -> sp.Basic | None:
+    """Recognize a direct antiderivative without a symbolic integration search."""
+    if expression.func is sp.sin and expression.args == (variable,):
+        return -sp.cos(variable)
+    if expression.func is sp.cos and expression.args == (variable,):
+        return sp.sin(variable)
+    if expression.func is sp.exp and expression.args == (variable,):
+        return sp.exp(variable)
+    if expression.func is sp.sinh and expression.args == (variable,):
+        return sp.cosh(variable)
+    if expression.func is sp.cosh and expression.args == (variable,):
+        return sp.sinh(variable)
+    if expression.func is sp.tan and expression.args == (variable,):
+        return -sp.log(sp.cos(variable))
+    if expression.func is sp.Pow and expression.args[0] == variable:
+        exponent = expression.args[1]
+        if exponent != sp.Integer(-1) and not exponent.has(variable):
+            return variable ** (exponent + 1) / (exponent + 1)
+    return None
+
+
+def _fast_antiderivative(
+    integrand: sp.Basic,
+    variable: sp.Symbol,
+) -> sp.Basic | None:
+    """Return a direct polynomial or elementary antiderivative when obvious."""
+    if integrand.is_polynomial(variable):
+        polynomial = sp.Poly(integrand, variable)
+        terms: list[sp.Basic] = []
+        for monomial, coefficient in polynomial.terms():
+            exponent = monomial[0]
+            terms.append(coefficient * variable ** (exponent + 1) / (exponent + 1))
+        return sp.Add(*terms)
+    coefficient, variable_part = integrand.as_independent(variable, as_Add=False)
+    if coefficient.has(variable):
+        return None
+    direct = _fast_basic_antiderivative(variable_part, variable)
+    if direct is None:
+        return None
+    return coefficient * direct
+
+
+def _is_trigonometric_square(
+    integrand: sp.Basic,
+    variable: sp.Symbol,
+) -> str | None:
+    """Classify a sine or cosine square without simplifying unrelated expressions."""
+    sine_square = sp.sin(variable) ** 2
+    cosine_square = sp.cos(variable) ** 2
+    if integrand == sine_square:
+        return "sine"
+    if integrand == cosine_square:
+        return "cosine"
+    # Equivalent forms such as 1 - cos(x)^2 are less common.  Only pay for
+    # simplification when the expression can plausibly be such an identity.
+    if integrand.func not in {sp.Add, sp.Pow}:
+        return None
+    if integrand.has(sp.sin) and sp.simplify(integrand - sine_square) == sp.Integer(0):
+        return "sine"
+    if integrand.has(sp.cos) and sp.simplify(integrand - cosine_square) == sp.Integer(0):
+        return "cosine"
+    return None
+
+
 def _evaluate_indefinite_integral(
     integrand: sp.Basic,
     variable: sp.Basic,
@@ -35,18 +102,20 @@ def _evaluate_indefinite_integral(
         reciprocal_linear = match_reciprocal_linear_integral(integrand, variable)
         if reciprocal_linear is not None:
             return reciprocal_linear.result
+        fast = _fast_antiderivative(integrand, variable)
+        if fast is not None:
+            return sp.Add(fast, integration_constant, evaluate=False)
     antiderivative = sp.integrate(integrand, variable)
     if isinstance(variable, sp.Symbol):
-        sine_square = sp.sin(variable) ** 2
-        cosine_square = sp.cos(variable) ** 2
-        if sp.simplify(integrand - sine_square) == sp.Integer(0):
+        trigonometric_square = _is_trigonometric_square(integrand, variable)
+        if trigonometric_square == "sine":
             return sp.Add(
                 variable / 2,
                 -sp.sin(2 * variable) / 4,
                 integration_constant,
                 evaluate=False,
             )
-        if sp.simplify(integrand - cosine_square) == sp.Integer(0):
+        if trigonometric_square == "cosine":
             return sp.Add(
                 variable / 2,
                 sp.sin(2 * variable) / 4,

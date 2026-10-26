@@ -12,13 +12,17 @@ requires-python = ">=3.12,<3.15"
 dependencies = [
     "sympy (>=1.14.0,<2.0.0)",
     "pydantic (>=2.9.0,<3.0.0)",
+]
+
+[project.optional-dependencies]
+web = [
     "fastapi (>=0.141.1,<0.142.0)",
     "uvicorn[standard] (>=0.52.3,<0.53.0)",
 ]
 
 [project.scripts]
 stepsolver = "stepsolver.cli:main"
-stepsolver-web = "stepsolver.web:main"
+stepsolver-web = "stepsolver.web_entry:main"
 stepsolver-isolated = "stepsolver.isolated_runner:main"
 
 [tool.poetry]
@@ -39,6 +43,8 @@ dev = [
     "pyright (>=1.1.411,<2.0.0)",
     "ty (>=0.0.72,<0.0.73)",
     "httpx2 (>=2.10.0,<3.0.0)",
+    "fastapi (>=0.141.1,<0.142.0)",
+    "uvicorn[standard] (>=0.52.3,<0.53.0)",
 ]
 
 [tool.ruff]

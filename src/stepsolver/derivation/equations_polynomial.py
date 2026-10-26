@@ -9,6 +9,7 @@ import sympy as sp
 from stepsolver.derivation.equations_support import (
     append_if_changed,
     equivalent_step,
+    evaluate_polynomial_at_rational,
     newton_values,
     rational_root_candidates,
     relations,
@@ -298,13 +299,29 @@ def derive_cubic_steps(
     excluded_values: tuple[sp.Basic, ...],
 ) -> tuple[BackendDerivationStep, ...]:
     """Solve a cubic with rational roots, Cardano, or Newton iteration."""
-    factored = _factored_polynomial_steps(
-        equation,
-        variable,
-        polynomial,
-        roots,
-        excluded_values,
+    candidates = rational_root_candidates(polynomial, variable)
+    candidate_evaluations = tuple(
+        evaluate_polynomial_at_rational(polynomial, candidate) for candidate in candidates
     )
+    exact_candidate_checks = (
+        bool(candidates)
+        and all(isinstance(coefficient, sp.Integer) for coefficient in polynomial.all_coeffs())
+        and all(evaluation is not None for evaluation in candidate_evaluations)
+    )
+    if exact_candidate_checks and not any(
+        evaluation == sp.Integer(0) for evaluation in candidate_evaluations
+    ):
+        # A cubic with no rational root is irreducible over the rationals, so
+        # factoring cannot expose a linear factor.  Skip that expensive search.
+        factored: tuple[BackendDerivationStep, ...] = ()
+    else:
+        factored = _factored_polynomial_steps(
+            equation,
+            variable,
+            polynomial,
+            roots,
+            excluded_values,
+        )
     if factored:
         return factored
     expression = polynomial.as_expr()
@@ -335,15 +352,20 @@ def derive_cubic_steps(
         first_radicand=first_radicand,
         second_radicand=second_radicand,
     )
-    candidates = rational_root_candidates(polynomial, variable)
     function = sp.Function("f")
     candidate_checks = tuple(
         sp.Eq(
             function(candidate),
-            sp.simplify(expression.subs(variable, candidate)),
+            evaluation
+            if evaluation is not None
+            else sp.simplify(expression.subs(variable, candidate)),
             evaluate=False,
         )
-        for candidate in candidates
+        for candidate, evaluation in zip(
+            candidates,
+            candidate_evaluations,
+            strict=True,
+        )
     )
     numerical_root = sp.N(roots[0], _DISPLAY_DIGITS)
     numerical_root_float = float(str(numerical_root))
@@ -352,10 +374,11 @@ def derive_cubic_steps(
     bracket_checks = tuple(
         sp.Eq(
             function(point),
-            sp.simplify(expression.subs(variable, point)),
+            evaluation if evaluation is not None else sp.simplify(expression.subs(variable, point)),
             evaluate=False,
         )
         for point in (lower, upper)
+        for evaluation in (evaluate_polynomial_at_rational(polynomial, point),)
     )
     derivative = sp.diff(expression, variable)
     initial = lower if derivative.subs(variable, lower) != sp.Integer(0) else upper

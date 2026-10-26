@@ -29,6 +29,7 @@ from stepsolver.derivation.definite_integrals import (
 )
 from stepsolver.derivation.derivatives import derive_derivative
 from stepsolver.derivation.equations import derive_polynomial_equation
+from stepsolver.derivation.equations_radical import derive_radical_equation
 from stepsolver.derivation.integrals_benchmark import derive_advanced_substitution_integral
 from stepsolver.derivation.integrals_elementary import (
     derive_basic_antiderivative,
@@ -67,6 +68,7 @@ from stepsolver.results import (
 )
 from stepsolver.sympy_conversion import SympyConverter
 from stepsolver.sympy_equation_steps import SympyEquationStepBuilder
+from stepsolver.sympy_equivalence import expressions_equivalent
 from stepsolver.sympy_matrix_steps import SympyMatrixStepBuilder
 from stepsolver.sympy_rendering import SympyDerivationRenderer
 from stepsolver.sympy_support import is_object_mapping, is_object_sequence
@@ -92,6 +94,10 @@ def _derive_indefinite_integral(
     variable: sp.Symbol,
     result: sp.Basic,
 ) -> tuple[BackendDerivationStep, ...]:
+    if integrand.is_polynomial(variable) and len(integrand.as_ordered_terms()) > 1:
+        polynomial_sum = derive_polynomial_sum_integral(integrand, variable, result)
+        if polynomial_sum:
+            return polynomial_sum
     strategies = (
         derive_basic_antiderivative,
         derive_reciprocal_linear_integral,
@@ -226,7 +232,7 @@ class SympyStepBuilder:
         if not is_algebra_scalar(original):
             return ()
         backend_expression = self._converter.to_sympy(original)
-        if sp.simplify(backend_expression - backend_value) != sp.Integer(0):
+        if not expressions_equivalent(backend_expression, backend_value):
             return ()
         description = describe_algebra_step(
             query.operation,
@@ -348,25 +354,39 @@ class SympyStepBuilder:
             return ()
         roots = self.solution_roots(backend_value, variable)
         try:
-            derivation = derive_transcendental_equation(
+            derivation = self._equation_derivation(
                 equation,
                 variable,
                 roots,
+                equation_expression,
             )
-            if not derivation:
-                denominators = tuple(
-                    self._converter.to_sympy(item)
-                    for item in domain_denominators(equation_expression)
-                )
-                derivation = derive_polynomial_equation(
-                    equation,
-                    variable,
-                    roots,
-                    denominators,
-                )
         except (sp.PolynomialError, TypeError, ValueError):
             return ()
         return tuple(self._renderer.solution_step(item) for item in derivation)
+
+    def _equation_derivation(
+        self,
+        equation: sp.Equality,
+        variable: sp.Symbol,
+        roots: tuple[sp.Basic, ...],
+        equation_expression: Relation,
+    ) -> tuple[BackendDerivationStep, ...]:
+        """Choose the most specific equation derivation before the polynomial fallback."""
+        derivation = derive_transcendental_equation(equation, variable, roots)
+        if derivation:
+            return derivation
+        derivation = derive_radical_equation(equation, variable, roots)
+        if derivation:
+            return derivation
+        denominators = tuple(
+            self._converter.to_sympy(item) for item in domain_denominators(equation_expression)
+        )
+        return derive_polynomial_equation(
+            equation,
+            variable,
+            roots,
+            denominators,
+        )
 
     def detailed_system_steps(
         self,
@@ -422,7 +442,7 @@ class SympyStepBuilder:
                 current = differentiated
         except (sp.PolynomialError, TypeError, ValueError):
             return ()
-        if sp.simplify(current - backend_value) != sp.Integer(0):
+        if not expressions_equivalent(current, backend_value, variable=variable):
             return ()
         return tuple(self._renderer.solution_step(item) for item in derivation)
 
