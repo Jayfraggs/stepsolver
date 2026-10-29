@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from stepsolver.ast import SolutionDomain as SolutionDomain  # ruff: ignore[useless-import-alias]
+
 if TYPE_CHECKING:
     from stepsolver.ast import Expression, Query
 
@@ -120,13 +122,6 @@ class BooleanValue:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class NoSolutionValue:
     """The empty solution set for an equation or system."""
-
-
-class SolutionDomain(Enum):
-    """The ambient domain of a universal solution set."""
-
-    REAL = "real"
-    COMPLEX = "complex"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

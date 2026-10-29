@@ -15,6 +15,7 @@ from stepsolver.ast import (
     Relation,
     RelationOperator,
     SequenceExpression,
+    SolutionDomain,
     Symbol,
 )
 from stepsolver.derivation.algebra import (
@@ -56,6 +57,7 @@ from stepsolver.derivation.integrals_structural import (
 )
 from stepsolver.derivation.limits import derive_limit
 from stepsolver.derivation.model import BackendDerivationStep
+from stepsolver.derivation.radicals import derive_radical_denesting
 from stepsolver.derivation.reciprocal_quadratic import derive_reciprocal_quadratic_integral
 from stepsolver.derivation.sums import derive_sum
 from stepsolver.derivation.systems import derive_linear_system
@@ -234,25 +236,20 @@ class SympyStepBuilder:
         backend_expression = self._converter.to_sympy(original)
         if not expressions_equivalent(backend_expression, backend_value):
             return ()
+        if query.operation is Operation.SIMPLIFY:
+            denesting = derive_radical_denesting(backend_expression, backend_value)
+            if denesting:
+                return tuple(self._renderer.solution_step(item) for item in denesting)
         description = describe_algebra_step(
             query.operation,
             original,
             backend_expression,
             backend_value,
         )
-        denominators = (
-            symbolic_denominators(original) if description.rule == "Cancel common factors" else ()
-        )
-        constraints = tuple(
-            StepConstraint(
-                explanation="An original denominator cannot equal zero.",
-                expression=Relation(
-                    operator=RelationOperator.NOT_EQUAL,
-                    left=denominator,
-                    right=Number(value=Fraction(0)),
-                ),
-            )
-            for denominator in denominators
+        constraints = (
+            self._original_domain_constraints(original)
+            if description.rule in {"Cancel common factors", "Decompose into partial fractions"}
+            else ()
         )
         return (
             SolutionStep(
@@ -269,6 +266,56 @@ class SympyStepBuilder:
                     ),
                 ),
                 introduced_constraints=constraints,
+            ),
+        )
+
+    def _original_domain_constraints(
+        self,
+        expression: Expression,
+    ) -> tuple[StepConstraint, ...]:
+        """Report real exclusions derived from the original denominators."""
+        restrictions: list[Expression] = []
+        for denominator in symbolic_denominators(expression):
+            for restriction in self._denominator_restrictions(denominator):
+                if restriction not in restrictions:
+                    restrictions.append(restriction)
+        return tuple(
+            StepConstraint(
+                explanation="An original denominator cannot equal zero.",
+                expression=restriction,
+            )
+            for restriction in restrictions
+        )
+
+    def _denominator_restrictions(self, denominator: Expression) -> tuple[Expression, ...]:
+        """Return real-valued exclusions for one denominator factor."""
+        backend = self._converter.to_sympy(denominator)
+        symbols = tuple(backend.free_symbols)
+        if len(symbols) == 1:
+            variable = symbols[0]
+            if backend.is_polynomial(variable):
+                try:
+                    roots = sp.real_roots(backend)
+                except (NotImplementedError, sp.PolynomialError, TypeError, ValueError):
+                    roots = None
+                if roots is not None:
+                    real_roots = sorted(set(roots), key=str)
+                    if not real_roots:
+                        return ()
+                    variable_expression = self._converter.from_sympy(variable)
+                    return tuple(
+                        Relation(
+                            operator=RelationOperator.NOT_EQUAL,
+                            left=variable_expression,
+                            right=self._converter.from_sympy(root),
+                        )
+                        for root in real_roots
+                    )
+        return (
+            Relation(
+                operator=RelationOperator.NOT_EQUAL,
+                left=denominator,
+                right=Number(value=Fraction(0)),
             ),
         )
 
@@ -359,6 +406,7 @@ class SympyStepBuilder:
                 variable,
                 roots,
                 equation_expression,
+                real_only=query.domain is SolutionDomain.REAL,
             )
         except (sp.PolynomialError, TypeError, ValueError):
             return ()
@@ -370,6 +418,8 @@ class SympyStepBuilder:
         variable: sp.Symbol,
         roots: tuple[sp.Basic, ...],
         equation_expression: Relation,
+        *,
+        real_only: bool = False,
     ) -> tuple[BackendDerivationStep, ...]:
         """Choose the most specific equation derivation before the polynomial fallback."""
         derivation = derive_transcendental_equation(equation, variable, roots)
@@ -386,6 +436,7 @@ class SympyStepBuilder:
             variable,
             roots,
             denominators,
+            real_only=real_only,
         )
 
     def detailed_system_steps(

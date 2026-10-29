@@ -1,6 +1,6 @@
 """Public solver orchestration."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from math import isfinite
 
@@ -11,6 +11,7 @@ from stepsolver.ast import (
     Number,
     Operation,
     Query,
+    SolutionDomain,
     Symbol,
 )
 from stepsolver.backend import SymbolicBackend
@@ -26,10 +27,35 @@ class Solver:
 
     backend: SymbolicBackend = field(default_factory=SympyBackend)
 
-    def solve(self, problem: str | Query) -> SolveResult:
-        """Solve source text or an already parsed query."""
+    def solve(
+        self,
+        problem: str | Query,
+        *,
+        domain: SolutionDomain | str | None = None,
+    ) -> SolveResult:
+        """Solve source text or an already parsed query.
+
+        ``domain`` optionally restricts an exact solve to real or complex values.
+        Omitting it preserves the documented per-operation default.
+        """
         query = parse(problem) if isinstance(problem, str) else problem
+        requested = self._coerce_domain(domain) if domain is not None else None
+        if requested is not None:
+            if query.domain is not None and query.domain is not requested:
+                raise QueryError("domain conflicts with the domain already recorded on the query")
+            if query.domain is None:
+                query = replace(query, domain=requested)
         return self.backend.solve(query)
+
+    @staticmethod
+    def _coerce_domain(domain: SolutionDomain | str) -> SolutionDomain:
+        """Validate a caller-supplied ambient domain."""
+        if isinstance(domain, SolutionDomain):
+            return domain
+        try:
+            return SolutionDomain(domain.strip().lower())
+        except ValueError as error:
+            raise QueryError("domain must be 'real' or 'complex'") from error
 
     def nsolve(
         self,

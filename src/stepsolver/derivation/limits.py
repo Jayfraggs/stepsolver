@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sympy as sp
 
+from stepsolver.derivation.limits_bounded import derive_bounded_oscillation_limit
 from stepsolver.derivation.limits_lhopital import derive_lhopital_limit
 from stepsolver.derivation.model import (
     BackendDerivationStep,
@@ -532,6 +533,7 @@ def derive_limit(
         _derive_factorial_recurrence_limit,
         derive_lhopital_limit,
         _derive_variable_power_limit,
+        derive_bounded_oscillation_limit,
         _derive_radical_rationalization,
         _derive_infinite_radical_conjugate,
         _derive_algebraic_limit,

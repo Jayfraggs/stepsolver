@@ -43,7 +43,9 @@ def fast_equivalence(
     if difference == sp.Integer(0):
         return True
     if difference.is_number:
-        return None if difference.has(sp.Float) else False
+        if difference.has(sp.Float):
+            return None
+        return sp.simplify(difference) == sp.Integer(0)
     variables = difference.free_symbols
     if not variables or (variable is not None and not variables.issubset({variable})):
         return None

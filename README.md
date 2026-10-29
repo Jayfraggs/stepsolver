@@ -125,6 +125,20 @@ result = Solver().solve("nsolve(cos(x) = x, x, 0.7)")
 
 `guess` may be an integer, float, exact fraction, or numeric string. Without a guess, a polynomial residual uses real-root isolation; a general transcendental residual returns an `UnsolvedResult` that asks for a guess. The numerical path solves over the real domain only, rejects complex candidates, verifies every returned root by substitution, uses a residual tolerance of `1e-12`, and bounds Newton's method to 50 iterations. Results carry a `NumericRootsValue` with the tolerance and a `NumericResult` with the method and residuals. `Solver.solve(...)` keeps its existing symbolic behavior; use `nsolve` when a decimal answer is intended.
 
+### Choose a solution domain
+
+Exact `solve` queries accept an optional `domain` keyword. Omitting it preserves the existing behavior; pass `"real"` or `"complex"` to make the ambient number domain explicit. A parsed query can carry the same choice through `Query.domain`.
+
+```python
+from stepsolver import SolutionDomain, Solver
+
+solver = Solver()
+real_result = solver.solve("solve(x^2 + 4 = 0, x)", domain="real")  # No solution
+complex_result = solver.solve("solve(x^2 + 4 = 0, x)", domain=SolutionDomain.COMPLEX)
+```
+
+Without a domain, isolated polynomial equations keep the documented complex-root default.
+
 ### Parse first, solve later
 
 The parser produces StepSolver's own immutable AST. A parsed `Query` can be inspected, stored, or passed to a solver.

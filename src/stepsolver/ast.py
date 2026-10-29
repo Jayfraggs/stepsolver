@@ -180,6 +180,13 @@ type Expression = (
 )
 
 
+class SolutionDomain(Enum):
+    """The ambient number domain for an exact solve request."""
+
+    REAL = "real"
+    COMPLEX = "complex"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Query:
     """A validated top-level solver request."""
@@ -187,3 +194,4 @@ class Query:
     operation: Operation
     arguments: tuple[Expression, ...]
     source: str
+    domain: SolutionDomain | None = None

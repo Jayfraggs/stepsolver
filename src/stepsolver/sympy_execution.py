@@ -1,12 +1,14 @@
 """Dispatch StepSolver operations to SymPy."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from typing import cast
 
 import sympy as sp
 
 from stepsolver.ast import (
     Operation,
     Query,
+    SolutionDomain,
     Symbol,
 )
 from stepsolver.errors import BackendError, QueryError
@@ -24,6 +26,41 @@ from stepsolver.sympy_support import (
     is_object_sequence,
     is_real_expression,
 )
+
+_SQRTDENEST = cast(
+    "Callable[[sp.Basic], sp.Basic]",
+    getattr(sp, "sqrtdenest"),  # ruff: ignore[get-attr-with-constant] - not in SymPy's public stubs
+)
+
+
+def _denest_numeric_radical(expression: sp.Basic) -> sp.Basic | None:
+    """Return a denested value for a numeric square root, when it is safe."""
+    if expression.free_symbols or expression.func is not sp.Pow or len(expression.args) != 2:
+        return None
+    radicand, exponent = expression.args
+    if exponent != sp.Rational(1, 2):
+        return None
+    try:
+        denested = _SQRTDENEST(expression)
+    except (NotImplementedError, TypeError, ValueError):
+        return None
+    if denested == expression or denested.free_symbols:
+        return None
+    if sp.simplify(sp.Pow(denested, 2) - radicand) != sp.Integer(0):
+        return None
+    if denested.is_positive is not True:
+        return None
+    return denested
+
+
+def _simplify_expression(expression: sp.Basic) -> sp.Basic:
+    """Simplify rational expressions without expanding ordinary polynomials."""
+    if expression.is_rational_function() and sp.denom(sp.together(expression)) != sp.Integer(1):
+        return sp.cancel(expression)
+    denested = _denest_numeric_radical(expression)
+    if denested is not None:
+        return denested
+    return sp.simplify(expression)
 
 
 def _fast_basic_antiderivative(
@@ -172,14 +209,27 @@ def _solve_polynomial_over_complex_numbers(
     return solutions
 
 
+def _solution_is_real(solution: object) -> bool:
+    """Return whether every value in a solved mapping is real-valued."""
+    if not is_object_mapping(solution):
+        return False
+    return all(
+        not isinstance(value, sp.Basic) or is_real_expression(value) for value in solution.values()
+    )
+
+
 def _solve_equations(
     equations: sp.Basic | Sequence[sp.Basic],
     symbols: tuple[sp.Basic, ...],
+    domain: SolutionDomain | None = None,
 ) -> object:
-    """Solve equations, keeping non-real roots only for isolated polynomial equations."""
+    """Solve equations, respecting the requested ambient domain."""
     polynomial_target = _single_polynomial_target(equations, symbols)
     if polynomial_target is not None:
-        return _solve_polynomial_over_complex_numbers(*polynomial_target)
+        solutions = _solve_polynomial_over_complex_numbers(*polynomial_target)
+        if domain is SolutionDomain.REAL:
+            return [solution for solution in solutions if _solution_is_real(solution)]
+        return solutions
     raw_solutions = sp.solve(equations, *symbols, dict=True)
     if not is_object_sequence(raw_solutions):
         return []
@@ -187,8 +237,7 @@ def _solve_equations(
     for solution in raw_solutions:
         if not is_object_mapping(solution):
             return []
-        values = tuple(solution.values())
-        if all(not isinstance(value, sp.Basic) or is_real_expression(value) for value in values):
+        if domain is SolutionDomain.COMPLEX or _solution_is_real(solution):
             filtered.append(solution)
     return filtered
 
@@ -247,7 +296,7 @@ class SympyExecutor:
         match operation:
             case Operation.SIMPLIFY:
                 expect_arity(query, 1)
-                return sp.simplify(self._converter.to_sympy(arguments[0]))
+                return _simplify_expression(self._converter.to_sympy(arguments[0]))
             case Operation.EXPAND:
                 expect_arity(query, 1)
                 return sp.expand(self._converter.to_sympy(arguments[0]))
@@ -265,7 +314,7 @@ class SympyExecutor:
                 expect_arity(query, 2)
                 equations = self._converter.equations(arguments[0])
                 symbols = self._converter.symbols(arguments[1])
-                return _solve_equations(equations, symbols)
+                return _solve_equations(equations, symbols, query.domain)
             case Operation.NSOLVE:
                 raise BackendError("numerical solves require the dedicated execution path")
             case Operation.SOLVE_INEQUALITY:

@@ -13,6 +13,7 @@ from stepsolver.ast import (
     OpaqueExpression,
     Relation,
     SequenceExpression,
+    SolutionDomain,
     Symbol,
     UnaryExpression,
     UnaryOperator,
@@ -25,7 +26,6 @@ from stepsolver.results import (
     NumericRootsValue,
     ScalarValue,
     SequenceValue,
-    SolutionDomain,
     UniversalSolutionValue,
 )
 

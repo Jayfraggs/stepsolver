@@ -242,6 +242,8 @@ def _factored_polynomial_steps(
     polynomial: sp.Poly,
     roots: tuple[sp.Basic, ...],
     excluded_values: tuple[sp.Basic, ...],
+    *,
+    real_only: bool = False,
 ) -> tuple[BackendDerivationStep, ...]:
     expression = polynomial.as_expr()
     factored = sp.factor(expression)
@@ -276,18 +278,52 @@ def _factored_polynomial_steps(
         excluded_values=excluded_values,
     )
     all_real = all(is_real_expression(root) for root in roots)
-    append_if_changed(
-        steps,
-        rule="Keep the real solutions" if all_real else "List all solutions",
-        before=current,
-        after=relations(variable, roots),
-        explanation=(
-            "Solve the lower-degree equations and keep the values allowed by the original "
-            "domain, including non-real roots when they arise."
-        ),
-        variable=variable,
-        excluded_values=excluded_values,
-    )
+    omitted_factor = None
+    if real_only:
+        for factor in factor_bases:
+            try:
+                factor_has_real_roots = bool(sp.real_roots(factor))
+            except (NotImplementedError, sp.PolynomialError, TypeError, ValueError):
+                factor_has_real_roots = True
+            if not factor_has_real_roots:
+                omitted_factor = factor
+                break
+    if omitted_factor is not None:
+        steps.append(
+            BackendDerivationStep(
+                rule="Keep the real solutions",
+                before=current,
+                after=relations(variable, roots),
+                explanation=(
+                    "The remaining factor has no real zeros, so it contributes no real "
+                    "solutions; only the real roots are kept."
+                ),
+                verification_method=VerificationMethod.EXACT_ARITHMETIC,
+                verification_detail="The omitted factor was checked to have no real roots.",
+                notes=(
+                    BackendMathNote(
+                        label="No real zeros",
+                        expression=BackendIdentity(
+                            left=omitted_factor,
+                            right=sp.Integer(0),
+                        ),
+                    ),
+                ),
+            )
+        )
+    else:
+        append_if_changed(
+            steps,
+            rule="Keep the real solutions" if all_real else "List all solutions",
+            before=current,
+            after=relations(variable, roots),
+            explanation=(
+                "Solve the lower-degree equations and keep the values allowed by the original "
+                "domain, including non-real roots when they arise."
+            ),
+            variable=variable,
+            excluded_values=excluded_values,
+        )
     return tuple(steps)
 
 
@@ -297,6 +333,8 @@ def derive_cubic_steps(
     polynomial: sp.Poly,
     roots: tuple[sp.Basic, ...],
     excluded_values: tuple[sp.Basic, ...],
+    *,
+    real_only: bool = False,
 ) -> tuple[BackendDerivationStep, ...]:
     """Solve a cubic with rational roots, Cardano, or Newton iteration."""
     candidates = rational_root_candidates(polynomial, variable)
@@ -321,6 +359,7 @@ def derive_cubic_steps(
             polynomial,
             roots,
             excluded_values,
+            real_only=real_only,
         )
     if factored:
         return factored
@@ -433,6 +472,8 @@ def derive_generic_polynomial_steps(
     polynomial: sp.Poly,
     roots: tuple[sp.Basic, ...],
     excluded_values: tuple[sp.Basic, ...],
+    *,
+    real_only: bool = False,
 ) -> tuple[BackendDerivationStep, ...]:
     """Solve higher-degree polynomials through verified factoring when possible."""
     factored = _factored_polynomial_steps(
@@ -441,10 +482,25 @@ def derive_generic_polynomial_steps(
         polynomial,
         roots,
         excluded_values,
+        real_only=real_only,
     )
     if factored:
         return factored
     if not roots:
+        if real_only:
+            return (
+                BackendDerivationStep(
+                    rule="Conclude there are no real solutions",
+                    before=equation,
+                    after=(),
+                    explanation=(
+                        "The polynomial does not cross zero on the real number line, so it "
+                        "has no real solutions."
+                    ),
+                    verification_method=VerificationMethod.EXACT_ARITHMETIC,
+                    verification_detail=("The polynomial was checked to have no real zeros."),
+                ),
+            )
         return (
             equivalent_step(
                 rule="Check for real roots",

@@ -157,6 +157,24 @@ def test_undefined_division_returns_a_typed_undefined_result(
     assert "zero" in result.reason.lower() or "undefined" in result.reason.lower()
     assert solve_payload(result).status == "undefined"
     assert "zoo" not in format_ascii(result)
+    assert len(result.steps) == 1
+    step = result.steps[0]
+    assert step.rule == "Identify the zero denominator"
+    assert format_expression(step.after) == "undefined"
+    assert any(note.label == "Zero denominator" for note in step.notes)
+
+
+def test_partial_fraction_decomposition_reports_original_denominator_restrictions(
+    solver: Solver,
+) -> None:
+    """The decomposition is valid only where the original denominator is nonzero."""
+    result = solver.solve("apart(1/(x^2*(x+1)),x)")
+    assert isinstance(result, ExactResult)
+    step = result.steps[0]
+    rendered = {
+        format_expression(constraint.expression) for constraint in step.introduced_constraints
+    }
+    assert rendered == {"x != 0", "x != -1"}
 
 
 def test_valid_symbolic_division_is_unaffected_by_zero_denominator_handling(

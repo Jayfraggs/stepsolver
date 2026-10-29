@@ -53,6 +53,8 @@ target-version = "py312"
 extend-exclude = [
     # This mirrors a third-party package boundary rather than project source.
     "typings",
+    # Benchmark notebooks are third-party fixtures, not project source.
+    "Benchmarking tests",
 ]
 
 [tool.ruff.lint]

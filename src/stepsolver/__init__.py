@@ -4,6 +4,7 @@ from stepsolver.ast import (
     Expression,
     Operation,
     Query,
+    SolutionDomain,
 )
 from stepsolver.backend import SymbolicBackend
 from stepsolver.errors import (
@@ -52,7 +53,6 @@ from stepsolver.results import (
     NumericRootsValue,
     ScalarValue,
     SequenceValue,
-    SolutionDomain,
     SolutionStep,
     SolveResult,
     StepConstraint,

@@ -1,5 +1,7 @@
 """SymPy implementation of the StepSolver symbolic backend."""
 
+from fractions import Fraction
+
 import sympy as sp
 
 from stepsolver.ast import (
@@ -18,6 +20,7 @@ from stepsolver.ast import (
     Relation,
     RelationOperator,
     SequenceExpression,
+    SolutionDomain,
     Symbol,
     UnaryExpression,
     UnaryOperator,
@@ -32,7 +35,6 @@ from stepsolver.results import (
     NoSolutionValue,
     NumericResult,
     NumericRootsValue,
-    SolutionDomain,
     SolutionStep,
     SolveResult,
     StepConstraint,
@@ -274,43 +276,77 @@ class SympyBackend:
     def _undefined_division_result(self, query: Query) -> UndefinedResult | None:
         """Return the typed undefined result for an identically zero denominator."""
         for argument in query.arguments:
-            if self._contains_zero_denominator(argument):
+            denominator = self._zero_denominator(argument)
+            if denominator is not None:
                 return UndefinedResult(
                     query=query,
                     reason="This expression is undefined because a denominator is zero.",
-                    steps=(),
+                    steps=(self._undefined_denominator_step(query, denominator),),
                 )
         return None
 
-    def _contains_zero_denominator(self, expression: Expression) -> bool:
-        """Detect division by an expression that simplifies to zero."""
+    def _zero_denominator(self, expression: Expression) -> Expression | None:
+        """Locate the first denominator that simplifies to zero."""
         if isinstance(expression, BinaryExpression):
-            if expression.operator is BinaryOperator.DIVIDE and self._simplifies_to_zero(
-                expression.right
-            ):
-                return True
-            if (
-                expression.operator is BinaryOperator.POWER
-                and self._simplifies_to_negative(expression.right)
-                and self._simplifies_to_zero(expression.left)
-            ):
-                return True
-            return self._contains_zero_denominator(
-                expression.left
-            ) or self._contains_zero_denominator(expression.right)
+            return self._binary_zero_denominator(expression)
         if isinstance(expression, UnaryExpression):
-            return self._contains_zero_denominator(expression.operand)
+            return self._zero_denominator(expression.operand)
         if isinstance(expression, FunctionCall):
-            return any(
-                self._contains_zero_denominator(argument) for argument in expression.arguments
-            )
+            return self._first_zero_denominator(expression.arguments)
         if isinstance(expression, Relation):
-            return self._contains_zero_denominator(
-                expression.left
-            ) or self._contains_zero_denominator(expression.right)
+            return self._first_zero_denominator((expression.left, expression.right))
         if isinstance(expression, SequenceExpression):
-            return any(self._contains_zero_denominator(item) for item in expression.items)
-        return False
+            return self._first_zero_denominator(expression.items)
+        return None
+
+    def _binary_zero_denominator(self, expression: BinaryExpression) -> Expression | None:
+        """Check the two operands of a binary expression for a zero denominator."""
+        if expression.operator is BinaryOperator.DIVIDE and self._simplifies_to_zero(
+            expression.right
+        ):
+            return expression.right
+        if (
+            expression.operator is BinaryOperator.POWER
+            and self._simplifies_to_negative(expression.right)
+            and self._simplifies_to_zero(expression.left)
+        ):
+            return expression.left
+        return self._first_zero_denominator((expression.left, expression.right))
+
+    def _first_zero_denominator(self, expressions: tuple[Expression, ...]) -> Expression | None:
+        """Return the first nested denominator that simplifies to zero."""
+        for expression in expressions:
+            found = self._zero_denominator(expression)
+            if found is not None:
+                return found
+        return None
+
+    @staticmethod
+    def _undefined_denominator_step(query: Query, denominator: Expression) -> SolutionStep:
+        """Show why a zero denominator makes the whole expression undefined."""
+        return SolutionStep(
+            rule="Identify the zero denominator",
+            before=query_expression(query),
+            after=OpaqueExpression(text="undefined"),
+            explanation=(
+                "The denominator simplifies to zero, so the expression has no value. Without a "
+                "defined expression there is no solution set to report."
+            ),
+            verification=Verification(
+                method=VerificationMethod.EXACT_ARITHMETIC,
+                detail="The denominator simplifies to exactly zero.",
+            ),
+            notes=(
+                StepNote(
+                    label="Zero denominator",
+                    expression=Relation(
+                        operator=RelationOperator.EQUAL,
+                        left=denominator,
+                        right=Number(value=Fraction(0)),
+                    ),
+                ),
+            ),
+        )
 
     def _simplifies_to_zero(self, expression: Expression) -> bool:
         """Check whether an expression is identically zero in the backend."""

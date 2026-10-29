@@ -153,6 +153,7 @@ def solver() -> Solver:
         ("limit((3*x^2+1)/(2*x^2-5),x,oo)", ("Compare the leading powers",)),
         ("limit(exp(x)/x^3,x,oo)", ("Use exponential growth",)),
         ("limit(cos(x),x,0)", ("Use direct substitution",)),
+        ("limit(x*sin(1/x),x,0)", ("Apply the squeeze theorem",)),
     ],
 )
 def test_common_families_choose_the_expected_human_method(
@@ -165,6 +166,39 @@ def test_common_families_choose_the_expected_human_method(
     assert isinstance(result, ExactResult)
     assert tuple(step.rule for step in result.steps) == expected_rules
     assert all(step.rule != "Compute exact result" for step in result.steps)
+
+
+@pytest.mark.parametrize(
+    ("query", "oscillating"),
+    [
+        ("limit(x*sin(1/x),x,0)", "sin(1 / x)"),
+        ("limit(x*cos(1/x),x,0)", "cos(1 / x)"),
+        ("limit(x^2*sin(1/x),x,0)", "sin(1 / x)"),
+    ],
+)
+def test_bounded_oscillation_limit_uses_the_squeeze_theorem(
+    solver: Solver,
+    query: str,
+    oscillating: str,
+) -> None:
+    """A vanishing factor times a bounded oscillation must show both squeeze bounds."""
+    result = solver.solve(query)
+    assert isinstance(result, ExactResult)
+    assert len(result.steps) == 1
+    step = result.steps[0]
+    assert step.rule == "Apply the squeeze theorem"
+    labels = {note.label for note in step.notes}
+    assert {
+        "Lower oscillation bound",
+        "Upper oscillation bound",
+        "Lower product bound",
+        "Upper product bound",
+        "Bounding limit",
+    } <= labels
+    assert any(oscillating in format_expression(note.expression) for note in step.notes)
+    assert any("<=" in format_expression(note.expression) for note in step.notes)
+    assert len(step.introduced_constraints) == 1
+    assert format_expression(step.introduced_constraints[0].expression).endswith("!= 0")
 
 
 def test_student_facing_latex_has_no_backend_or_neutral_artifacts(solver: Solver) -> None:
