@@ -14,6 +14,7 @@ import sympy as sp
 from stepsolver.ast import (
     Expression,
     Number,
+    OpaqueExpression,
     Operation,
     Query,
     Relation,
@@ -234,75 +235,84 @@ class SympyEquationStepBuilder:
     # Inequalities --------------------------------------------------------------------
 
     def _inequality_steps(self, query: Query, backend_value: sp.Basic) -> tuple[SolutionStep, ...]:
-        original = query.arguments[0]
-        variable_expression = query.arguments[1]
-        inequality = self._converter.to_sympy(original)
-        variable = self._converter.to_sympy(variable_expression)
-        if (
-            not isinstance(original, Relation)
-            or not isinstance(variable, sp.Symbol)
-            or not isinstance(inequality, sp.Rel)
-        ):
+        parsed = self._inequality_expression(query)
+        if parsed is None:
             return ()
-        difference = sp.expand(inequality.lhs - inequality.rhs)
-        if difference.free_symbols != {variable} or not difference.is_polynomial(variable):
+        original, variable, difference = parsed
+        operator = original.operator.value
+        chart = self._sign_chart(difference, variable)
+        if chart is None:
             return ()
-        roots = sorted(
-            set(sp.real_roots(difference)),
+        zeros, poles = chart
+        boundaries = sorted(
+            set(zeros) | set(poles),
             key=lambda root: float(str(sp.N(root, 15))),
         )
-        if not roots:
-            return ()
-        tested = self._test_intervals(inequality, difference, variable, roots)
-        included: list[sp.Basic] = [
-            interval for interval, passed, _value, _point in tested if passed
-        ]
-        if inequality.rel_op not in {"<", ">"}:
-            included.append(sp.FiniteSet(*roots))
-        solution_set = sp.Union(*included)
-        try:
-            backend_set = backend_value.as_set()
-        except (NotImplementedError, TypeError, ValueError):
-            return ()
-        if backend_set != solution_set:
+        backend_set = self._backend_solution_set(backend_value)
+        if backend_set is None:
             return ()
         reduced = Relation(
             operator=original.operator,
             left=self._converter.from_sympy(difference),
             right=self._integer(0),
         )
+        move_step = self._step(
+            rule="Move every term to one side",
+            before=query_expression(query),
+            after=reduced,
+            explanation=(
+                "Subtract the right side from both sides so the sign is compared with zero."
+            ),
+            method=VerificationMethod.SOLUTION_SET_EQUIVALENCE,
+            detail="Subtracting the same quantity from both sides keeps the solution set.",
+        )
+        if not boundaries:
+            return self._constant_sign_inequality_steps(
+                operator,
+                difference,
+                variable,
+                backend_set=backend_set,
+                reduced=reduced,
+                move_step=move_step,
+            )
+        tested = self._test_intervals(operator, difference, variable, boundaries)
+        solution_set = self._inequality_solution_set(operator, tested, zeros, poles)
+        if solution_set is None or solution_set != backend_set:
+            return ()
         boundary = SequenceExpression(
-            items=tuple(self._converter.from_sympy(root) for root in roots)
+            items=tuple(self._converter.from_sympy(root) for root in boundaries)
         )
         return (
-            self._step(
-                rule="Move every term to one side",
-                before=query_expression(query),
-                after=reduced,
-                explanation=(
-                    "Subtract the right side from both sides so the sign is compared with zero."
-                ),
-                method=VerificationMethod.SOLUTION_SET_EQUIVALENCE,
-                detail="Subtracting the same quantity from both sides keeps the solution set.",
-            ),
+            move_step,
             self._step(
                 rule="Find the boundary points",
                 before=reduced,
                 after=boundary,
-                explanation=(
-                    "A polynomial can change sign only where it equals zero, so solve the "
-                    "polynomial equal to zero."
-                ),
+                explanation=self._boundary_explanation(difference, has_poles=bool(poles)),
                 method=VerificationMethod.SUBSTITUTION,
-                detail="Substituting each boundary point makes the polynomial exactly zero.",
-                notes=tuple(
-                    StepNote(
-                        label=f"Polynomial at {root}",
-                        expression=self._converter.from_sympy(
-                            sp.simplify(difference.subs(variable, root))
-                        ),
-                    )
-                    for root in roots
+                detail=(
+                    "Substituting each zero makes the numerator exactly zero, and each pole "
+                    "makes the original denominator zero."
+                    if poles
+                    else "Substituting each boundary point makes the expression exactly zero."
+                ),
+                notes=(
+                    *(
+                        StepNote(
+                            label=f"Zero at {root}",
+                            expression=self._converter.from_sympy(
+                                sp.simplify(difference.subs(variable, root))
+                            ),
+                        )
+                        for root in zeros
+                    ),
+                    *(
+                        StepNote(
+                            label=f"Undefined pole at {root}",
+                            expression=OpaqueExpression(text="undefined"),
+                        )
+                        for root in poles
+                    ),
                 ),
             ),
             self._step(
@@ -314,8 +324,8 @@ class SympyEquationStepBuilder:
                     "intervals where the inequality is true"
                     + (
                         "."
-                        if inequality.rel_op in {"<", ">"}
-                        else ", together with the boundary points."
+                        if operator in {"<", ">"}
+                        else ", together with the zeros that are not excluded by a pole."
                     )
                 ),
                 method=VerificationMethod.SOLUTION_SET_EQUIVALENCE,
@@ -333,15 +343,181 @@ class SympyEquationStepBuilder:
             ),
         )
 
+    def _inequality_expression(
+        self,
+        query: Query,
+    ) -> tuple[Relation, sp.Symbol, sp.Basic] | None:
+        """Parse an inequality and reduce it to one difference from zero."""
+        original = query.arguments[0]
+        variable = self._converter.to_sympy(query.arguments[1])
+        if not isinstance(original, Relation) or not isinstance(variable, sp.Symbol):
+            return None
+        difference = sp.together(
+            self._converter.to_sympy(original.left) - self._converter.to_sympy(original.right)
+        )
+        if difference.free_symbols != {variable}:
+            return None
+        return original, variable, difference
+
     @staticmethod
-    def _test_intervals(
-        inequality: sp.Rel,
+    def _backend_solution_set(backend_value: sp.Basic) -> sp.Basic | None:
+        """Convert the backend relation to a set, treating the universal set as the reals."""
+        try:
+            backend_set = backend_value.as_set()
+        except (AttributeError, NotImplementedError, TypeError, ValueError):
+            return None
+        universal_set = cast("sp.Basic", getattr(sp, "UniversalSet"))
+        if backend_set is universal_set:
+            return cast("sp.Basic", getattr(sp, "Reals"))
+        return backend_set
+
+    @staticmethod
+    def _inequality_solution_set(
+        operator: str,
+        tested: list[tuple[sp.Interval, bool, sp.Basic, sp.Basic]],
+        zeros: tuple[sp.Basic, ...],
+        poles: tuple[sp.Basic, ...],
+    ) -> sp.Basic | None:
+        """Assemble the kept intervals and eligible boundary roots into one set."""
+        if not tested:
+            return None
+        included = [interval for interval, passed, _value, _point in tested if passed]
+        included_roots = (
+            [root for root in zeros if root not in poles] if operator not in {"<", ">"} else []
+        )
+        return sp.Union(*included, sp.FiniteSet(*included_roots))
+
+    def _constant_sign_inequality_steps(
+        self,
+        operator: str,
         difference: sp.Basic,
         variable: sp.Symbol,
-        roots: list[sp.Basic],
+        *,
+        backend_set: sp.Basic,
+        reduced: Relation,
+        move_step: SolutionStep,
+    ) -> tuple[SolutionStep, ...]:
+        """Explain an inequality whose expression never changes sign on the real line."""
+        point = sp.Integer(0)
+        value = sp.simplify(difference.subs(variable, point))
+        holds = self._comparison_holds(operator, value)
+        if holds is None:
+            return ()
+        solution_set = cast("sp.Basic", getattr(sp, "Reals")) if holds else sp.FiniteSet()
+        if solution_set != backend_set:
+            return ()
+        return (
+            move_step,
+            self._step(
+                rule="Check the sign for every real number",
+                before=reduced,
+                after=OpaqueExpression(text="all real numbers" if holds else "no real solutions"),
+                explanation=(
+                    "The expression has no zero and no pole, so it cannot change sign. "
+                    + (
+                        "Testing one real number shows that the inequality holds everywhere."
+                        if holds
+                        else "Testing one real number shows that the inequality never holds."
+                    )
+                ),
+                method=VerificationMethod.SOLUTION_SET_EQUIVALENCE,
+                detail="The single sign check agrees with the backend solution set.",
+                notes=(
+                    StepNote(
+                        label=f"At {variable} = {point}",
+                        expression=self._converter.from_sympy(value),
+                    ),
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _boundary_explanation(difference: sp.Basic, *, has_poles: bool) -> str:
+        if has_poles:
+            return (
+                "A rational expression can change sign only where its numerator is zero or "
+                "its denominator is zero. Poles are excluded from the solution."
+            )
+        if difference.has(sp.Abs):
+            return (
+                "An absolute-value expression can change sign only where the whole expression "
+                "equals zero, so solve that equation for the boundary points."
+            )
+        return (
+            "A polynomial can change sign only where it equals zero, so solve the "
+            "polynomial equal to zero."
+        )
+
+    @staticmethod
+    def _sign_chart(
+        difference: sp.Basic,
+        variable: sp.Symbol,
+    ) -> tuple[tuple[sp.Basic, ...], tuple[sp.Basic, ...]] | None:
+        """Return the real zeros of the numerator and the real poles of the denominator."""
+        numerator, denominator = sp.fraction(difference)
+        zeros = SympyEquationStepBuilder._real_solutions(numerator, variable)
+        if zeros is None:
+            return None
+        if denominator.has(variable):
+            poles = SympyEquationStepBuilder._real_solutions(denominator, variable)
+            if poles is None:
+                return None
+        else:
+            poles = ()
+        return zeros, poles
+
+    @staticmethod
+    def _real_solutions(
+        expression: sp.Basic,
+        variable: sp.Symbol,
+    ) -> tuple[sp.Basic, ...] | None:
+        """Solve one univariate expression for its complete finite set of real zeros."""
+        if not expression.has(variable):
+            return ()
+        try:
+            raw_solutions = sp.solve(sp.Eq(expression, 0), variable)
+        except (NotImplementedError, TypeError, ValueError):
+            return None
+        if not isinstance(raw_solutions, list):
+            return None
+        solutions = cast("list[object]", raw_solutions)
+        real_solutions: list[sp.Basic] = []
+        for candidate in solutions:
+            if not isinstance(candidate, sp.Basic):
+                return None
+            solution = candidate
+            if solution.is_real is True:
+                real_solutions.append(solution)
+            elif solution.is_real is not False:
+                return None
+        return tuple(real_solutions)
+
+    @staticmethod
+    def _comparison_holds(operator: str, value: sp.Basic) -> bool | None:
+        comparisons = {
+            "<": sp.Lt(value, sp.Integer(0)),
+            ">": sp.Gt(value, sp.Integer(0)),
+            "<=": sp.Le(value, sp.Integer(0)),
+            ">=": sp.Ge(value, sp.Integer(0)),
+        }
+        comparison = comparisons.get(operator)
+        if comparison is None:
+            return None
+        if comparison is sp.true:
+            return True
+        if comparison is sp.false:
+            return False
+        return None
+
+    @staticmethod
+    def _test_intervals(
+        operator: str,
+        difference: sp.Basic,
+        variable: sp.Symbol,
+        boundaries: list[sp.Basic],
     ) -> list[tuple[sp.Interval, bool, sp.Basic, sp.Basic]]:
-        """Evaluate the polynomial at one exact point inside each open interval."""
-        bounds = [-sp.oo, *roots, sp.oo]
+        """Evaluate the sign of the expression at one exact point inside each open interval."""
+        bounds = [-sp.oo, *boundaries, sp.oo]
         results: list[tuple[sp.Interval, bool, sp.Basic, sp.Basic]] = []
         for lower, upper in pairwise(bounds):
             if lower == -sp.oo:
@@ -356,7 +532,7 @@ class SympyEquationStepBuilder:
                 ">": sp.Gt(value, sp.Integer(0)),
                 "<=": sp.Le(value, sp.Integer(0)),
                 ">=": sp.Ge(value, sp.Integer(0)),
-            }.get(inequality.rel_op)
+            }.get(operator)
             if comparison is None:
                 return []
             results.append((sp.Interval.open(lower, upper), bool(comparison), value, point))

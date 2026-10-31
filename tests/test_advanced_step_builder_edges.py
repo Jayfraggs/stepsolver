@@ -126,8 +126,8 @@ def test_equation_builder_rejects_malformed_recurrences() -> None:
     assert builder.steps(different_function, sp.Integer(0)) == ()
 
 
-def test_equation_builder_rejects_inequalities_outside_its_method() -> None:
-    """Non-polynomial, rootless, and mismatched inequalities must stay unexplained."""
+def test_equation_builder_handles_constant_sign_and_rejects_mismatches() -> None:
+    """A constant-sign inequality is explained, while mismatched sets stay unexplained."""
     builder = SympyEquationStepBuilder(SympyConverter())
     assert (
         builder.steps(
@@ -136,6 +136,10 @@ def test_equation_builder_rejects_inequalities_outside_its_method() -> None:
         )
         == ()
     )
-    assert builder.steps(parse("solve_inequality(x^2+1>0,x)"), sp.true) == ()
+    constant_steps = builder.steps(parse("solve_inequality(x^2+1>0,x)"), sp.true)
+    assert tuple(step.rule for step in constant_steps) == (
+        "Move every term to one side",
+        "Check the sign for every real number",
+    )
     wrong_set = sp.Lt(sp.Symbol("x", real=True), sp.Integer(1))
     assert builder.steps(parse("solve_inequality(x^2<4,x)"), wrong_set) == ()

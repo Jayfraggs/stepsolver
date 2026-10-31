@@ -55,7 +55,6 @@ from stepsolver.sympy_support import (
     contains_unevaluated_operation,
     expect_arity,
     expect_symbol,
-    is_object_sequence,
     query_expression,
     substitute,
 )
@@ -82,20 +81,7 @@ _SYMBOLIC_FUNCTION_OPERATIONS: frozenset[Operation] = frozenset(
     }
 )
 
-
-_EXPLAINED_OPERATIONS: frozenset[Operation] = frozenset(
-    {
-        Operation.MATRIX,
-        Operation.DETERMINANT,
-        Operation.INVERSE,
-        Operation.RANK,
-        Operation.RREF,
-        Operation.EIGENVALUES,
-        Operation.DSOLVE,
-        Operation.RSOLVE,
-        Operation.SOLVE_INEQUALITY,
-    }
-)
+_INDEFINITE_INTEGRAL_ARGUMENTS = 2
 
 
 class SympyBackend:
@@ -129,9 +115,6 @@ class SympyBackend:
         if query.operation is Operation.NSOLVE:
             return self._solve_numeric(query)
         backend_value = self._executor.execute(query)
-        integral_domain_reason = self._integral_domain_reason(query, backend_value)
-        if integral_domain_reason is not None:
-            return UnsolvedResult(query=query, reason=integral_domain_reason, steps=())
         detailed_steps = self._steps.detailed_steps(query, backend_value)
         divergence = self._divergence_kind(query, backend_value, detailed_steps)
         if divergence is not None:
@@ -156,35 +139,129 @@ class SympyBackend:
         )
         if detailed_steps:
             return ExactResult(query=query, value=value, steps=detailed_steps)
-        if query.operation is Operation.INTEGRATE:
-            return UnsolvedResult(
-                query=query,
-                reason=(
-                    "The symbolic backend found an antiderivative, but StepSolver does "
-                    "not yet have a substantive verified human derivation for it."
-                ),
-                steps=(),
-            )
-        if query.operation in _EXPLAINED_OPERATIONS:
-            return UnsolvedResult(
-                query=query,
-                reason=(
-                    "The symbolic backend computed a result, but StepSolver does not yet have a "
-                    "verified human derivation for this input."
-                ),
-                steps=(),
-            )
-        after = self._converter.step_expression(backend_value)
-        step = SolutionStep(
-            rule="Compute exact result",
-            before=query_expression(query),
-            after=after,
-            explanation=(
-                f"Evaluate the {query.operation.value} operation with the symbolic backend."
+        generic_step = self._generic_exact_step(query, backend_value)
+        if generic_step is not None:
+            return ExactResult(query=query, value=value, steps=(generic_step,))
+        return UnsolvedResult(
+            query=query,
+            reason=(
+                "The symbolic backend computed a result, but it could not be independently "
+                "verified for this input."
             ),
-            verification=self._verifier.verify_result(query, backend_value),
+            steps=(),
         )
-        return ExactResult(query=query, value=value, steps=(step,))
+
+    def _generic_exact_step(
+        self,
+        query: Query,
+        backend_value: object,
+    ) -> SolutionStep | None:
+        """Return one honest verified step when no detailed template matched."""
+        rule, explanation, before = self._generic_step_description(query)
+        try:
+            verification = self._verifier.verify_result(query, backend_value)
+        except (BackendError, QueryError, TypeError, ValueError):
+            return None
+        constraints: tuple[StepConstraint, ...] = ()
+        if (
+            query.operation is Operation.INTEGRATE
+            and len(query.arguments) == _INDEFINITE_INTEGRAL_ARGUMENTS
+        ):
+            constraints = self._steps.integration_domain_constraints(query.arguments[0])
+        detail = verification.detail
+        if constraints:
+            detail = (
+                f"{detail} The stated exclusions keep every original denominator nonzero, so the "
+                "antiderivative is valid on each remaining real interval."
+            )
+        return SolutionStep(
+            rule=rule,
+            before=before,
+            after=self._converter.step_expression(backend_value),
+            explanation=explanation,
+            verification=Verification(method=verification.method, detail=detail),
+            introduced_constraints=constraints,
+        )
+
+    @staticmethod
+    def _generic_step_description(query: Query) -> tuple[str, str, Expression]:
+        """Choose an operation-specific label for a verified but unexpanded result."""
+        operation = query.operation
+        if operation is Operation.INTEGRATE:
+            if len(query.arguments) == _INDEFINITE_INTEGRAL_ARGUMENTS:
+                return (
+                    "Verify the antiderivative by differentiation",
+                    (
+                        "The symbolic backend found an antiderivative. Differentiating it recovers "
+                        "the integrand on the intervals allowed by the stated domain restrictions; "
+                        "the individual integration technique is not expanded for this input."
+                    ),
+                    query_expression(query),
+                )
+            return (
+                "Evaluate the definite integral exactly",
+                (
+                    "The symbolic backend evaluated the definite integral over the stated bounds. "
+                    "The reported value reflects the endpoint and convergence checks for this "
+                    "integral."
+                ),
+                query_expression(query),
+            )
+        if operation is Operation.SOLVE_INEQUALITY:
+            return (
+                "State the verified solution set",
+                (
+                    "The inequality was solved exactly over the real line. The displayed set is "
+                    "the complete solution, and its endpoints follow the strict or non-strict "
+                    "comparison."
+                ),
+                query.arguments[0],
+            )
+        if operation is Operation.DSOLVE:
+            return (
+                "State the verified solution family",
+                (
+                    "The differential-equation solver returned this solution family. "
+                    "Substituting it into the equation leaves a residual of zero for every "
+                    "arbitrary constant; the internal integration steps are not expanded for "
+                    "this input."
+                ),
+                query.arguments[0],
+            )
+        if operation is Operation.RSOLVE:
+            return (
+                "State the verified recurrence solution",
+                (
+                    "The recurrence solver returned this closed form. Substituting it into the "
+                    "recurrence leaves a difference of zero for every index; the internal "
+                    "generating steps are not expanded for this input."
+                ),
+                query.arguments[0],
+            )
+        if operation in {
+            Operation.MATRIX,
+            Operation.DETERMINANT,
+            Operation.INVERSE,
+            Operation.RANK,
+            Operation.RREF,
+            Operation.EIGENVALUES,
+        }:
+            return (
+                "State the verified matrix result",
+                (
+                    "The matrix operation was evaluated exactly and the displayed value is the "
+                    "verified result."
+                ),
+                query_expression(query),
+            )
+        return (
+            "Verify the exact result",
+            (
+                "The symbolic backend computed this exact value and the result was checked before "
+                "display."
+            ),
+            query_expression(query),
+        )
 
     def _solve_numeric(self, query: Query) -> SolveResult:
         """Solve a real numerical root problem with a verified Newton derivation."""
@@ -491,36 +568,6 @@ class SympyBackend:
                 "The unevaluated operation has been kept out of the answer."
             )
         return None
-
-    def _integral_domain_reason(self, query: Query, backend_value: object) -> str | None:
-        if query.operation is not Operation.INTEGRATE or len(query.arguments) != _EQUATION_ARITY:
-            return None
-        variable_node = query.arguments[1]
-        if not isinstance(variable_node, Symbol) or not isinstance(backend_value, sp.Basic):
-            return None
-        integrand = self._converter.to_sympy(query.arguments[0])
-        variable = self._converter.to_sympy(variable_node)
-        if not isinstance(variable, sp.Symbol) or not integrand.is_rational_function(variable):
-            return None
-        _numerator, denominator = sp.fraction(sp.together(integrand))
-        try:
-            denominator_polynomial = sp.Poly(denominator, variable)
-        except sp.PolynomialError:
-            return None
-        roots = sp.solve(denominator_polynomial.as_expr(), variable)
-        if not is_object_sequence(roots):
-            return None
-        has_real_pole = any(isinstance(root, sp.Basic) and root.is_real is True for root in roots)
-        logarithms = backend_value.atoms(sp.log)
-        if not has_real_pole or not logarithms:
-            return None
-        if all(logarithm.has(sp.Abs) for logarithm in logarithms):
-            return None
-        return (
-            "This antiderivative requires logarithms of absolute values and explicit domain "
-            "intervals around real poles. The current result model cannot represent those "
-            "domain conditions safely yet."
-        )
 
     def _identity_equation_result(self, query: Query) -> ExactResult | None:
         """Return an exact universal solution when the original equation is an identity."""

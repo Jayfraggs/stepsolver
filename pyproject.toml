@@ -146,7 +146,7 @@ explicit-preview-rules = false
     "too-many-return-statements",
 ]
 "src/stepsolver/sympy_matrix_steps.py" = ["too-many-arguments"]
-"src/stepsolver/sympy_equation_steps.py" = ["too-many-arguments"]
+"src/stepsolver/sympy_equation_steps.py" = ["get-attr-with-constant", "too-many-arguments"]
 "src/stepsolver/sympy_steps.py" = ["magic-value-comparison"]
 "src/stepsolver/sympy_support.py" = [
     "f-string-in-exception",
@@ -160,6 +160,18 @@ explicit-preview-rules = false
     "raw-string-in-exception",
 ]
 "src/stepsolver/derivation/*.py" = ["too-many-arguments", "too-many-locals"]
+"src/stepsolver/derivation/definite_integrals_improper.py" = [
+    "complex-structure",
+    "get-attr-with-constant",
+    "too-many-return-statements",
+]
+"src/stepsolver/derivation/integrals_elementary.py" = ["get-attr-with-constant"]
+"tests/test_derivation_helper_edges.py" = [
+    "boolean-positional-value-in-call",
+    "import-private-name",
+    "magic-value-comparison",
+    "private-member-access",
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

@@ -7,7 +7,6 @@ from stepsolver import (
     ExactResult,
     ScalarValue,
     Solver,
-    UnsolvedResult,
     format_ascii,
     format_expression,
     format_latex_expression,
@@ -356,14 +355,19 @@ def test_reciprocal_integral_handles_shifted_linear_denominators(
     assert tuple(format_expression(item.expression) for item in constraints) == expected_constraints
 
 
-def test_general_rational_logarithmic_integrals_with_multiple_poles_are_still_declined(
+def test_general_rational_logarithmic_integrals_keep_verified_result_with_poles(
     solver: Solver,
 ) -> None:
-    """A partial-fraction result with several poles is not faked as a one-log answer."""
+    """A verified partial-fraction result is retained with its real pole exclusions."""
     result = solver.solve("integrate(1/(x^2-1),x)")
-    assert isinstance(result, UnsolvedResult)
-    assert "absolute values" in result.reason
-    assert "domain" in result.reason
+    assert isinstance(result, ExactResult)
+    assert result.steps
+    constraints = result.steps[0].introduced_constraints
+    assert tuple(format_expression(item.expression) for item in constraints) == (
+        "x != -1",
+        "x != 1",
+    )
+    assert all(step.rule != "Compute exact result" for step in result.steps)
 
 
 @pytest.mark.parametrize(

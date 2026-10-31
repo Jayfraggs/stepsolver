@@ -5,7 +5,7 @@ import pytest
 from stepsolver import (
     ExactResult,
     Solver,
-    UnsolvedResult,
+    VerificationMethod,
     format_ascii,
     format_latex_expression,
     solve_payload,
@@ -97,12 +97,16 @@ def test_advanced_operation_has_student_facing_steps(
     assert all(step.rule != _OPAQUE_RULE for step in payload.steps), case_id
 
 
-def test_underivable_integral_still_remains_unsolved(solver: Solver) -> None:
-    """The fallback work must not relabel genuinely unsupported integrations as exact."""
+def test_integral_without_a_specific_template_keeps_a_verified_answer(
+    solver: Solver,
+) -> None:
+    """A verified antiderivative must not be discarded just because no template matched."""
     result = solver.solve("integrate(1/(x^4+1),x)")
-    assert isinstance(result, UnsolvedResult)
-    assert result.steps == ()
-    assert "substantive verified human derivation" in result.reason
+    assert isinstance(result, ExactResult)
+    assert result.steps
+    assert result.steps[0].rule == "Verify the antiderivative by differentiation"
+    assert result.steps[0].verification.method is VerificationMethod.DIFFERENTIATION
+    assert _OPAQUE_RULE not in format_ascii(result)
 
 
 def test_matrix_route_uses_actual_row_operations(solver: Solver) -> None:
@@ -192,14 +196,15 @@ def test_ordinary_supported_paths_are_not_routed_into_the_guard(solver: Solver) 
         assert result.steps[0].rule == rule, query
 
 
-def test_symbolic_row_reduction_without_a_derivation_is_honestly_unsolved(
+def test_symbolic_row_reduction_without_a_specific_template_keeps_a_verified_answer(
     solver: Solver,
 ) -> None:
-    """A computed but unexplained symbolic result must not become a fake exact answer."""
+    """A verified symbolic matrix result must not be discarded for lack of a template."""
     result = solver.solve("rref(matrix([[x,1],[1,0]]))")
-    assert isinstance(result, UnsolvedResult)
-    assert result.steps == ()
-    assert "verified human derivation" in result.reason
+    assert isinstance(result, ExactResult)
+    assert result.steps
+    assert result.steps[0].rule == "State the verified matrix result"
+    assert _OPAQUE_RULE not in format_ascii(result)
 
 
 def test_one_by_one_determinant_uses_its_only_entry(solver: Solver) -> None:
@@ -262,23 +267,26 @@ def test_non_strict_inequality_keeps_its_boundary_points(solver: Solver) -> None
     result = solver.solve("solve_inequality(x^2<=4,x)")
     assert isinstance(result, ExactResult)
     assert "Result: (-2 <= x) & (x <= 2)" in format_ascii(result)
-    assert "together with the boundary points" in result.steps[-1].explanation
+    assert "together with the zeros that are not excluded by a pole" in result.steps[-1].explanation
 
 
 @pytest.mark.parametrize(
-    "query",
+    ("query", "expected_rule"),
     [
-        "solve_inequality(x^2+1<0,x)",
-        "solve_inequality(sin(x)<0,x)",
-        "dsolve(y(x)=0,y(x))",
-        "rsolve(a(n)=0,a(n))",
+        ("solve_inequality(x^2+1<0,x)", "Move every term to one side"),
+        ("solve_inequality(sin(x)<0,x)", "State the verified solution set"),
+        ("dsolve(y(x)=0,y(x))", "State the verified solution family"),
+        ("rsolve(a(n)=0,a(n))", "State the verified recurrence solution"),
     ],
 )
-def test_advanced_operations_without_a_verified_derivation_stay_unsolved(
+def test_advanced_operations_keep_verified_answers_with_honest_steps(
     solver: Solver,
     query: str,
+    expected_rule: str,
 ) -> None:
-    """A computed backend object alone is not enough to claim a taught derivation."""
+    """A verified backend result is retained with an honest, non-opaque step."""
     result = solver.solve(query)
-    assert isinstance(result, UnsolvedResult), query
-    assert result.steps == (), query
+    assert isinstance(result, ExactResult), query
+    assert result.steps, query
+    assert result.steps[0].rule == expected_rule, query
+    assert _OPAQUE_RULE not in format_ascii(result), query

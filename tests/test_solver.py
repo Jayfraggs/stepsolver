@@ -1304,14 +1304,14 @@ def test_non_circular_contour_uses_the_parameter_integral(solver: Solver) -> Non
     assert "Result: 1/2" in format_ascii(result)
 
 
-def test_integral_without_human_derivation_is_not_returned_as_exact(
+def test_integral_without_a_specific_template_keeps_a_verified_answer(
     solver: Solver,
 ) -> None:
-    """A backend antiderivative alone must not masquerade as a worked solution."""
+    """A verified antiderivative is returned even when no derivation template matches."""
     result = solver.solve("integrate(1/(x^4+1),x)")
-    assert isinstance(result, UnsolvedResult)
-    assert result.steps == ()
-    assert "substantive verified human derivation" in result.reason
+    assert isinstance(result, ExactResult)
+    assert result.steps
+    assert result.steps[0].rule == "Verify the antiderivative by differentiation"
     assert "Compute exact result" not in format_ascii(result)
 
 

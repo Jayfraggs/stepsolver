@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import sympy as sp
 
@@ -455,6 +455,69 @@ def _match_basic_antiderivative(
     return None
 
 
+def _derive_scaled_inverse_sine(
+    integrand: sp.Basic,
+    variable: sp.Symbol,
+    result: sp.Basic,
+) -> tuple[BackendDerivationStep, ...]:
+    """Recognize ``c/sqrt(a**2 - (b*x)**2)`` as a scaled inverse-sine antiderivative."""
+    coefficient, rest = integrand.as_independent(variable, as_Add=False)
+    rest = cast("sp.Basic", getattr(sp, "powsimp")(rest, force=True))
+    if rest.func is not sp.Pow:
+        return ()
+    if getattr(rest, "exp", None) != sp.Rational(-1, 2):
+        return ()
+    wild_a = sp.Wild("a", exclude=[variable])
+    wild_b = sp.Wild("b", exclude=[variable])
+    pattern = sp.Pow(wild_a**2 - (wild_b * variable) ** 2, sp.Rational(-1, 2))
+    match = rest.match(pattern)
+    if match is None:
+        return ()
+    scale = match[wild_a]
+    rate = match[wild_b]
+    scale_is_valid = not scale.has(variable) and scale.is_positive is True
+    rate_is_valid = not rate.has(variable) and rate.is_positive is True
+    if not (scale_is_valid and rate_is_valid):
+        return ()
+    antiderivative = sp.Mul(
+        coefficient,
+        sp.asin(sp.Mul(rate, variable, evaluate=False) / scale),
+        sp.Pow(rate, -1, evaluate=False),
+        evaluate=False,
+    )
+    integration_constant = sp.Symbol("C")
+    formula = sp.Add(antiderivative, integration_constant, evaluate=False)
+    if not expressions_equivalent(formula, result, variable=variable):
+        return ()
+    return (
+        BackendDerivationStep(
+            rule="Use the scaled inverse-sine antiderivative",
+            before=BackendIntegral(integrand=integrand, variable=variable),
+            after=formula,
+            explanation=(
+                "Write the integrand as a constant multiple of 1/sqrt(a^2 - u^2) with u a "
+                "constant multiple of the variable, then apply the inverse-sine pattern."
+            ),
+            verification_method=VerificationMethod.DIFFERENTIATION,
+            verification_detail=(
+                "Differentiating the displayed antiderivative recovers the integrand."
+            ),
+            notes=(
+                BackendMathNote(
+                    label="Derivative pair",
+                    expression=BackendIdentity(
+                        left=BackendDerivative(
+                            expression=antiderivative,
+                            variable=variable,
+                        ),
+                        right=integrand,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 def derive_basic_antiderivative(
     integrand: sp.Basic,
     variable: sp.Symbol,
@@ -508,6 +571,24 @@ def derive_basic_antiderivative(
                 ),
             ),
         )
+    return _derive_remaining_antiderivative(
+        integrand,
+        variable,
+        result,
+        integration_constant,
+    )
+
+
+def _derive_remaining_antiderivative(
+    integrand: sp.Basic,
+    variable: sp.Symbol,
+    result: sp.Basic,
+    integration_constant: sp.Symbol,
+) -> tuple[BackendDerivationStep, ...]:
+    """Try the scaled inverse-sine, reverse-chain, and power rules."""
+    scaled_inverse_sine = _derive_scaled_inverse_sine(integrand, variable, result)
+    if scaled_inverse_sine:
+        return scaled_inverse_sine
     reverse_chain = _derive_reverse_chain_antiderivative(
         integrand,
         variable,

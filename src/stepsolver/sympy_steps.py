@@ -45,6 +45,7 @@ from stepsolver.derivation.integrals_special import (
     derive_integration_by_parts,
     derive_inverse_hyperbolic_integral,
     derive_partial_fraction_integral,
+    derive_polynomial_inverse_by_parts,
     derive_shifted_semicircle_integral,
     derive_square_root_rational_integral,
     derive_trigonometric_power_integral,
@@ -115,6 +116,7 @@ def _derive_indefinite_integral(
         derive_trigonometric_power_integral,
         derive_inverse_function_by_parts,
         derive_cyclic_exponential_trig_integral,
+        derive_polynomial_inverse_by_parts,
         derive_integration_by_parts,
         derive_advanced_substitution_integral,
         derive_gaussian_antiderivative,
@@ -268,6 +270,15 @@ class SympyStepBuilder:
                 introduced_constraints=constraints,
             ),
         )
+
+    def integration_domain_constraints(
+        self,
+        integrand: Expression,
+    ) -> tuple[StepConstraint, ...]:
+        """Report real exclusions that keep the integrand's original denominators nonzero."""
+        if not is_algebra_scalar(integrand):
+            return ()
+        return self._original_domain_constraints(integrand)
 
     def _original_domain_constraints(
         self,
