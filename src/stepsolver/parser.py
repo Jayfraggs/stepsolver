@@ -267,9 +267,7 @@ class _Parser:
                 return Constant(name=constant)
             return Symbol(name=Identifier(token.text))
         if self._accept(_TokenKind.LEFT_PAREN) is not None:
-            expression = self._parse_relation()
-            self._expect(_TokenKind.RIGHT_PAREN, "expected ')'")
-            return expression
+            return self._parse_parenthesized()
         if self._accept(_TokenKind.LEFT_BRACKET) is not None:
             return self._parse_sequence()
         raise ParseError("expected an expression", position=token.position)
@@ -295,6 +293,20 @@ class _Parser:
                 if self._accept(_TokenKind.COMMA) is None:
                     break
             self._expect(_TokenKind.RIGHT_BRACKET, "expected ']' after sequence")
+        return SequenceExpression(items=tuple(items))
+
+    def _parse_parenthesized(self) -> Expression:
+        """Parse a grouped expression or a parenthesized comma-separated sequence."""
+        first = self._parse_relation()
+        if self._accept(_TokenKind.COMMA) is None:
+            self._expect(_TokenKind.RIGHT_PAREN, "expected ')'")
+            return first
+        items = [first]
+        while True:
+            items.append(self._parse_relation())
+            if self._accept(_TokenKind.COMMA) is None:
+                break
+        self._expect(_TokenKind.RIGHT_PAREN, "expected ')' after parenthesized sequence")
         return SequenceExpression(items=tuple(items))
 
 

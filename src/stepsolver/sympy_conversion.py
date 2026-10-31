@@ -73,6 +73,7 @@ _SUPPORTED_FUNCTION_NAMES: frozenset[str] = frozenset(
         "log",
         "root",
         Operation.DIFFERENTIATE.value,
+        "Derivative",
         "matrix",
     }
 )
@@ -206,8 +207,10 @@ class SympyConverter:
 
     def function_to_sympy(self, expression: FunctionCall) -> sp.Basic:
         """Convert a public function call to a supported SymPy function."""
-        arguments = tuple(self.to_sympy(argument) for argument in expression.arguments)
         name = str(expression.name)
+        if name in {Operation.DIFFERENTIATE.value, "Derivative"}:
+            return self._derivative_to_sympy(expression, name)
+        arguments = tuple(self.to_sympy(argument) for argument in expression.arguments)
         unary = _UNARY_FUNCTIONS.get(name)
         if unary is not None:
             if len(arguments) != 1:
@@ -224,16 +227,31 @@ class SympyConverter:
                 raise QueryError("root expects a radicand and an index")
             reciprocal_index = sp.Pow(arguments[1], -1, evaluate=False)
             return sp.Pow(arguments[0], reciprocal_index, evaluate=False)
-        if name == Operation.DIFFERENTIATE.value:
-            if len(arguments) not in {2, 3}:
-                raise QueryError("nested diff expects two or three arguments")
-            order = 1
-            if len(expression.arguments) == 3:
-                order = expect_integer(expression.arguments[2], role="derivative order")
-            return sp.diff(arguments[0], arguments[1], order)
         if name == "matrix":
             raise QueryError("matrix is only valid as an argument to a matrix operation")
         return sp.Function(name)(*arguments)
+
+    def _derivative_to_sympy(self, expression: FunctionCall, name: str) -> sp.Basic:
+        """Convert ``diff(...)`` or SymPy-style ``Derivative(...)`` syntax."""
+        if len(expression.arguments) not in {2, 3}:
+            raise QueryError(f"nested {name} expects two or three arguments")
+        target = self.to_sympy(expression.arguments[0])
+        variable_argument = expression.arguments[1]
+        if isinstance(variable_argument, SequenceExpression):
+            if len(expression.arguments) != 2:
+                raise QueryError(f"{name} cannot combine a tuple with a separate order")
+            if len(variable_argument.items) != 2:
+                raise QueryError(f"{name} with a tuple expects a variable and an order")
+            variable = self.to_sympy(
+                expect_symbol(variable_argument.items[0], role="derivative variable")
+            )
+            order = expect_integer(variable_argument.items[1], role="derivative order")
+            return sp.diff(target, variable, order)
+        variable = self.to_sympy(variable_argument)
+        order = 1
+        if len(expression.arguments) == 3:
+            order = expect_integer(expression.arguments[2], role="derivative order")
+        return sp.diff(target, variable, order)
 
     def equations(self, expression: Expression) -> sp.Basic | Sequence[sp.Basic]:
         """Convert one equation or a sequence of equations."""
