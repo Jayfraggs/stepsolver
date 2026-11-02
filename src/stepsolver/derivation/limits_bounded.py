@@ -66,28 +66,66 @@ def derive_bounded_oscillation_limit(
     )
     return (
         BackendDerivationStep(
-            rule="Apply the squeeze theorem",
+            rule="Bound the oscillating factor",
             before=displayed,
+            after=(
+                BackendRelation(operator="<=", left=sp.Integer(-1), right=bounded),
+                BackendRelation(operator="<=", left=bounded, right=sp.Integer(1)),
+            ),
+            explanation=(
+                "A sine or cosine takes every value between -1 and 1, so the oscillating "
+                "factor stays inside that interval wherever it is defined."
+            ),
+            verification_method=VerificationMethod.EXACT_ARITHMETIC,
+            verification_detail=(
+                "The bounded factor is a sine or cosine, whose real range is [-1, 1]."
+            ),
+            introduced_constraints=(
+                BackendStepConstraint(
+                    explanation="The oscillating factor requires a nonzero argument.",
+                    expression=BackendNotEqual(left=variable, right=point),
+                ),
+            ),
+        ),
+        BackendDerivationStep(
+            rule="Multiply the bounds by the vanishing factor",
+            before=(
+                BackendRelation(operator="<=", left=sp.Integer(-1), right=bounded),
+                BackendRelation(operator="<=", left=bounded, right=sp.Integer(1)),
+            ),
+            after=(
+                BackendRelation(operator="<=", left=-bound, right=expression),
+                BackendRelation(operator="<=", left=expression, right=bound),
+            ),
+            explanation=(
+                "Multiply the oscillation bounds by the remaining factor. Taking the "
+                "absolute value of that factor gives one lower and one upper bound that "
+                "hold whichever sign the factor has."
+            ),
+            verification_method=VerificationMethod.EXACT_ARITHMETIC,
+            verification_detail=(
+                "Multiplying -1 <= f <= 1 by g yields -|g| <= f*g <= |g| for either sign of g."
+            ),
+        ),
+        BackendDerivationStep(
+            rule="Apply the squeeze theorem",
+            before=BackendLimit(
+                expression=bound,
+                variable=variable,
+                point=point,
+                direction=direction,
+            ),
             after=result,
             explanation=(
-                "The oscillating factor stays between -1 and 1 wherever it is defined, while the "
-                "remaining factor tends to 0. The product is therefore trapped between the two "
-                "bounds -|g| and |g|, and both bounds tend to 0."
+                "Both bounding expressions tend to 0, so the squeezed product has the same "
+                "limit by the squeeze theorem."
             ),
             verification_method=VerificationMethod.BACKEND_IDENTITY,
             verification_detail=(
-                "The squeeze theorem applies: the oscillating factor is bounded and the other "
-                "factor tends to zero."
+                "The lower and upper bounding limits are both zero, so the squeezed "
+                "expression tends to zero."
             ),
             notes=(
-                BackendMathNote(
-                    label="Lower oscillation bound",
-                    expression=BackendRelation(operator="<=", left=sp.Integer(-1), right=bounded),
-                ),
-                BackendMathNote(
-                    label="Upper oscillation bound",
-                    expression=BackendRelation(operator="<=", left=bounded, right=sp.Integer(1)),
-                ),
                 BackendMathNote(
                     label="Lower product bound",
                     expression=BackendRelation(operator="<=", left=-bound, right=expression),
@@ -99,12 +137,6 @@ def derive_bounded_oscillation_limit(
                 BackendMathNote(
                     label="Bounding limit",
                     expression=BackendIdentity(left=bound_limit, right=sp.Integer(0)),
-                ),
-            ),
-            introduced_constraints=(
-                BackendStepConstraint(
-                    explanation="The oscillating factor requires a nonzero argument.",
-                    expression=BackendNotEqual(left=variable, right=point),
                 ),
             ),
         ),

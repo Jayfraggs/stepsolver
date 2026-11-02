@@ -107,6 +107,8 @@ explicit-preview-rules = false
     "redundant-numeric-union",
 ]
 "src/stepsolver/sympy_backend.py" = [
+    "get-attr-with-constant",
+    "magic-value-comparison",
     "raise-vanilla-args",
     "raw-string-in-exception",
     "too-many-locals",
@@ -160,6 +162,27 @@ explicit-preview-rules = false
     "raw-string-in-exception",
 ]
 "src/stepsolver/derivation/*.py" = ["too-many-arguments", "too-many-locals"]
+"src/stepsolver/derivation/equations_exponential_logarithmic.py" = [
+    "complex-structure",
+    "get-attr-with-constant",
+    "magic-value-comparison",
+    "too-many-branches",
+    "too-many-positional-arguments",
+    "too-many-return-statements",
+]
+"src/stepsolver/derivation/limits_two_sided.py" = ["get-attr-with-constant"]
+"src/stepsolver/derivation/series.py" = ["get-attr-with-constant"]
+"src/stepsolver/derivation/sums_series.py" = [
+    "complex-structure",
+    "too-many-branches",
+    "too-many-return-statements",
+]
+"src/stepsolver/derivation/systems.py" = [
+    "complex-structure",
+    "get-attr-with-constant",
+    "too-many-branches",
+    "too-many-statements",
+]
 "src/stepsolver/derivation/definite_integrals_improper.py" = [
     "complex-structure",
     "get-attr-with-constant",
@@ -172,6 +195,7 @@ explicit-preview-rules = false
     "magic-value-comparison",
     "private-member-access",
 ]
+"tests/test_derivation_helpers_prompt9.py" = ["private-member-access"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

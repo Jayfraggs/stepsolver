@@ -17,6 +17,7 @@ from stepsolver.derivation.model import (
     BackendMathNote,
     BackendProduct,
     BackendSum,
+    BackendUndefined,
 )
 from stepsolver.results import VerificationMethod
 
@@ -60,6 +61,15 @@ def derive_improper_integral(
     )
     if singularity_steps:
         return singularity_steps
+    interior_steps = _derive_interior_singularity_integral(
+        integrand,
+        variable,
+        lower,
+        upper,
+        result,
+    )
+    if interior_steps:
+        return interior_steps
     has_infinite_lower = lower == -sp.oo and upper not in {sp.oo, -sp.oo}
     has_infinite_upper = upper == sp.oo and lower not in {sp.oo, -sp.oo}
     if not has_infinite_lower and not has_infinite_upper:
@@ -537,6 +547,193 @@ def _derive_endpoint_singularity_integral(
                 "The endpoint limit determines whether the improper integral converges."
             ),
         ),
+    )
+
+
+def _singularity_points(
+    integrand: sp.Basic,
+    variable: sp.Symbol,
+    lower: sp.Basic,
+    upper: sp.Basic,
+) -> tuple[sp.Basic, ...] | None:
+    """Return the real singularities inside a finite integration interval."""
+    try:
+        singularities = cast(
+            "sp.Basic",
+            getattr(sp, "singularities")(integrand, variable),
+        )
+    except (NotImplementedError, TypeError, ValueError):
+        return None
+    if not isinstance(singularities, sp.FiniteSet):
+        return None
+    try:
+        interval = cast("sp.Basic", getattr(sp, "Interval")(lower, upper))
+        contains = getattr(interval, "contains")
+        points = tuple(
+            point
+            for point in cast("Iterable[object]", singularities)
+            if isinstance(point, sp.Basic) and point.is_real is True and bool(contains(point))
+        )
+    except (TypeError, ValueError):
+        return None
+    return points
+
+
+def _derive_interior_singularity_integral(
+    integrand: sp.Basic,
+    variable: sp.Symbol,
+    lower: sp.Basic,
+    upper: sp.Basic,
+    result: sp.Basic,
+) -> tuple[BackendDerivationStep, ...]:
+    """Split an improper integral at a singularity inside the interval."""
+    if lower in {sp.oo, -sp.oo} or upper in {sp.oo, -sp.oo}:
+        return ()
+    points = _singularity_points(integrand, variable, lower, upper)
+    if points is None:
+        return ()
+    interior = tuple(point for point in points if point not in {lower, upper})
+    if len(interior) != 1:
+        return ()
+    singular = interior[0]
+    antiderivative = sp.integrate(integrand, variable)
+    if antiderivative.has(sp.Integral):
+        return ()
+    if sp.simplify(sp.diff(antiderivative, variable) - integrand) != sp.Integer(0):
+        return ()
+    left_bound = sp.Symbol("a", real=True)
+    right_bound = sp.Symbol("b", real=True)
+    left_difference = sp.simplify(
+        antiderivative.subs(variable, left_bound) - antiderivative.subs(variable, lower)
+    )
+    right_difference = sp.simplify(
+        antiderivative.subs(variable, upper) - antiderivative.subs(variable, right_bound)
+    )
+    try:
+        left_value = cast(
+            "sp.Basic",
+            getattr(sp, "limit")(left_difference, left_bound, singular, dir="-"),
+        )
+        right_value = cast(
+            "sp.Basic",
+            getattr(sp, "limit")(right_difference, right_bound, singular, dir="+"),
+        )
+    except (NotImplementedError, TypeError, ValueError):
+        return ()
+    if left_value.has(_UNEVALUATED_LIMIT) or right_value.has(_UNEVALUATED_LIMIT):
+        return ()
+    total = sp.simplify(left_value + right_value)
+    if not _matches_integral_value(total, result):
+        return ()
+    both_finite = (
+        getattr(left_value, "is_finite", None) is True
+        and getattr(right_value, "is_finite", None) is True
+    )
+    original = BackendIntegral(
+        integrand=integrand,
+        variable=variable,
+        lower=lower,
+        upper=upper,
+    )
+    left_integral = BackendIntegral(
+        integrand=integrand,
+        variable=variable,
+        lower=lower,
+        upper=left_bound,
+    )
+    right_integral = BackendIntegral(
+        integrand=integrand,
+        variable=variable,
+        lower=right_bound,
+        upper=upper,
+    )
+    left_limit = BackendLimit(
+        expression=left_integral,
+        variable=left_bound,
+        point=singular,
+        direction="-",
+    )
+    right_limit = BackendLimit(
+        expression=right_integral,
+        variable=right_bound,
+        point=singular,
+        direction="+",
+    )
+    if both_finite:
+        conclusion = BackendDerivationStep(
+            rule="Add the two one-sided values",
+            before=BackendSum(terms=(left_value, right_value)),
+            after=total,
+            explanation=(
+                "Both pieces converge, so the improper integral is their sum. A convergent "
+                "interior singularity must be approached independently from each side."
+            ),
+            verification_method=VerificationMethod.EXACT_ARITHMETIC,
+            verification_detail=(
+                "The two one-sided improper integrals are finite and add to the displayed value."
+            ),
+        )
+    else:
+        conclusion = BackendDerivationStep(
+            rule="Conclude the integral diverges",
+            before=BackendSum(terms=(left_value, right_value)),
+            after=BackendUndefined() if total in {sp.nan, sp.zoo} else total,
+            explanation=(
+                "At least one piece does not converge. The two one-sided limits are taken "
+                "independently, so an infinite value on one side cannot be cancelled by the "
+                "other side."
+            ),
+            verification_method=VerificationMethod.EXACT_ARITHMETIC,
+            verification_detail=(
+                "A convergent improper integral requires both one-sided pieces to be finite."
+            ),
+        )
+    return (
+        BackendDerivationStep(
+            rule="Split the integral at the interior singularity",
+            before=original,
+            after=BackendSum(terms=(left_integral, right_integral)),
+            explanation=(
+                "The integrand is unbounded inside the interval. Split the integral at that "
+                "point and evaluate each piece as a separate one-sided improper integral."
+            ),
+            verification_method=VerificationMethod.SYMBOLIC_EQUIVALENCE,
+            verification_detail=(
+                "The split is valid because both endpoints of the whole interval are finite."
+            ),
+            notes=(
+                BackendMathNote(
+                    label="Interior singularity",
+                    expression=BackendIdentity(
+                        left=variable,
+                        right=singular,
+                    ),
+                ),
+            ),
+        ),
+        BackendDerivationStep(
+            rule="Evaluate the left piece as a limit",
+            before=left_limit,
+            after=left_value,
+            explanation=(
+                "Replace the singular upper endpoint with a finite bound and approach the "
+                "singularity from the left."
+            ),
+            verification_method=VerificationMethod.EXACT_ARITHMETIC,
+            verification_detail="The one-sided limit gives the exact left-piece value.",
+        ),
+        BackendDerivationStep(
+            rule="Evaluate the right piece as a limit",
+            before=right_limit,
+            after=right_value,
+            explanation=(
+                "Replace the singular lower endpoint with a finite bound and approach the "
+                "singularity from the right."
+            ),
+            verification_method=VerificationMethod.EXACT_ARITHMETIC,
+            verification_detail="The one-sided limit gives the exact right-piece value.",
+        ),
+        conclusion,
     )
 
 

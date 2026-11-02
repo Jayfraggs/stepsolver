@@ -114,7 +114,13 @@ class SympyBackend:
             return precheck
         if query.operation is Operation.NSOLVE:
             return self._solve_numeric(query)
-        backend_value = self._executor.execute(query)
+        try:
+            backend_value = self._executor.execute(query)
+        except ValueError:
+            nonexistent_limit = self._nonexistent_limit_result(query)
+            if nonexistent_limit is None:
+                raise
+            return nonexistent_limit
         detailed_steps = self._steps.detailed_steps(query, backend_value)
         divergence = self._divergence_kind(query, backend_value, detailed_steps)
         if divergence is not None:
@@ -358,7 +364,7 @@ class SympyBackend:
                 return UndefinedResult(
                     query=query,
                     reason="This expression is undefined because a denominator is zero.",
-                    steps=(self._undefined_denominator_step(query, denominator),),
+                    steps=self._undefined_denominator_steps(query, denominator),
                 )
         return None
 
@@ -399,28 +405,46 @@ class SympyBackend:
         return None
 
     @staticmethod
-    def _undefined_denominator_step(query: Query, denominator: Expression) -> SolutionStep:
-        """Show why a zero denominator makes the whole expression undefined."""
-        return SolutionStep(
-            rule="Identify the zero denominator",
-            before=query_expression(query),
-            after=OpaqueExpression(text="undefined"),
-            explanation=(
-                "The denominator simplifies to zero, so the expression has no value. Without a "
-                "defined expression there is no solution set to report."
-            ),
-            verification=Verification(
-                method=VerificationMethod.EXACT_ARITHMETIC,
-                detail="The denominator simplifies to exactly zero.",
-            ),
-            notes=(
-                StepNote(
-                    label="Zero denominator",
-                    expression=Relation(
-                        operator=RelationOperator.EQUAL,
-                        left=denominator,
-                        right=Number(value=Fraction(0)),
+    def _undefined_denominator_steps(
+        query: Query,
+        denominator: Expression,
+    ) -> tuple[SolutionStep, ...]:
+        """Show the denominator collapsing to zero, then the undefined conclusion."""
+        return (
+            SolutionStep(
+                rule="Simplify the denominator",
+                before=denominator,
+                after=Number(value=Fraction(0)),
+                explanation=(
+                    "Collect and cancel terms inside the denominator. Every remaining term "
+                    "cancels, so the denominator reduces to exactly zero."
+                ),
+                verification=Verification(
+                    method=VerificationMethod.EXACT_ARITHMETIC,
+                    detail="The denominator simplifies to exactly zero.",
+                ),
+                notes=(
+                    StepNote(
+                        label="Zero denominator",
+                        expression=Relation(
+                            operator=RelationOperator.EQUAL,
+                            left=denominator,
+                            right=Number(value=Fraction(0)),
+                        ),
                     ),
+                ),
+            ),
+            SolutionStep(
+                rule="Conclude the expression is undefined",
+                before=query_expression(query),
+                after=OpaqueExpression(text="undefined"),
+                explanation=(
+                    "Division by zero has no value, so the whole expression is undefined. "
+                    "Without a defined expression there is no solution set to report."
+                ),
+                verification=Verification(
+                    method=VerificationMethod.BACKEND_IDENTITY,
+                    detail="No value can be assigned to an expression with a zero denominator.",
                 ),
             ),
         )
@@ -441,6 +465,15 @@ class SympyBackend:
 
     @staticmethod
     def _divergence_reasons(operation: Operation) -> dict[DivergenceKind, str]:
+        if operation is Operation.LIMIT:
+            return {
+                DivergenceKind.POSITIVE_INFINITY: "The limit is +infinity.",
+                DivergenceKind.NEGATIVE_INFINITY: "The limit is -infinity.",
+                DivergenceKind.NONFINITE: (
+                    "The one-sided limits disagree or do not settle on a finite value, so the "
+                    "limit does not exist."
+                ),
+            }
         noun = "series" if operation is Operation.SUM else "improper integral"
         return {
             DivergenceKind.POSITIVE_INFINITY: f"The {noun} diverges to +infinity.",
@@ -473,6 +506,22 @@ class SympyBackend:
             steps=steps,
         )
 
+    def _nonexistent_limit_result(self, query: Query) -> DivergentResult | None:
+        """Turn a backend refusal to evaluate a two-sided limit into a structured result."""
+        if query.operation is not Operation.LIMIT or len(query.arguments) != 3:
+            return None
+        if not isinstance(query.arguments[1], Symbol):
+            return None
+        steps = self._steps.detailed_limit_steps(query, sp.nan)
+        if not steps:
+            return None
+        return DivergentResult(
+            query=query,
+            kind=DivergenceKind.NONFINITE,
+            reason=self._divergence_reasons(query.operation)[DivergenceKind.NONFINITE],
+            steps=steps,
+        )
+
     def _divergence_kind(
         self,
         query: Query,
@@ -487,6 +536,19 @@ class SympyBackend:
             and len(query.arguments) == _DEFINITE_INTEGRAL_ARITY
         ):
             return self._integral_divergence_kind(backend_value, detailed_steps)
+        if query.operation is Operation.LIMIT and len(query.arguments) in {3, 4}:
+            return self._limit_divergence_kind(backend_value)
+        return None
+
+    @staticmethod
+    def _limit_divergence_kind(backend_value: object) -> DivergenceKind | None:
+        """Classify a limit whose two-sided value is non-finite or unsettled."""
+        if not isinstance(backend_value, sp.Basic):
+            return None
+        if backend_value in {sp.nan, sp.zoo}:
+            return DivergenceKind.NONFINITE
+        if backend_value.has(getattr(sp, "AccumBounds")):
+            return DivergenceKind.NONFINITE
         return None
 
     def _sum_divergence_kind(

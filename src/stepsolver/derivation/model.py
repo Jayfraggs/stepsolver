@@ -281,6 +281,7 @@ type BackendExpression = (
     | BackendQuotient
     | BackendDifference
     | BackendIdentity
+    | tuple[BackendExpression, ...]
 )
 
 

@@ -157,11 +157,12 @@ def test_undefined_division_returns_a_typed_undefined_result(
     assert "zero" in result.reason.lower() or "undefined" in result.reason.lower()
     assert solve_payload(result).status == "undefined"
     assert "zoo" not in format_ascii(result)
-    assert len(result.steps) == 1
-    step = result.steps[0]
-    assert step.rule == "Identify the zero denominator"
-    assert format_expression(step.after) == "undefined"
-    assert any(note.label == "Zero denominator" for note in step.notes)
+    assert tuple(step.rule for step in result.steps) == (
+        "Simplify the denominator",
+        "Conclude the expression is undefined",
+    )
+    assert format_expression(result.steps[-1].after) == "undefined"
+    assert any(note.label == "Zero denominator" for note in result.steps[0].notes)
 
 
 def test_partial_fraction_decomposition_reports_original_denominator_restrictions(

@@ -30,6 +30,10 @@ from stepsolver.derivation.definite_integrals import (
 )
 from stepsolver.derivation.derivatives import derive_derivative
 from stepsolver.derivation.equations import derive_polynomial_equation
+from stepsolver.derivation.equations_absolute import derive_absolute_value_equation
+from stepsolver.derivation.equations_exponential_logarithmic import (
+    derive_exponential_logarithmic_equation,
+)
 from stepsolver.derivation.equations_radical import derive_radical_equation
 from stepsolver.derivation.integrals_benchmark import derive_advanced_substitution_integral
 from stepsolver.derivation.integrals_elementary import (
@@ -60,8 +64,12 @@ from stepsolver.derivation.limits import derive_limit
 from stepsolver.derivation.model import BackendDerivationStep
 from stepsolver.derivation.radicals import derive_radical_denesting
 from stepsolver.derivation.reciprocal_quadratic import derive_reciprocal_quadratic_integral
+from stepsolver.derivation.series import derive_series
 from stepsolver.derivation.sums import derive_sum
-from stepsolver.derivation.systems import derive_linear_system
+from stepsolver.derivation.systems import (
+    derive_linear_system,
+    derive_nonlinear_two_by_two_system,
+)
 from stepsolver.derivation.transcendental_equations import derive_transcendental_equation
 from stepsolver.results import (
     SolutionStep,
@@ -207,6 +215,8 @@ class SympyStepBuilder:
                 steps = self.detailed_integral_steps(query, backend_value)
             case Operation.LIMIT:
                 steps = self.detailed_limit_steps(query, backend_value)
+            case Operation.SERIES:
+                steps = self.detailed_series_steps(query, backend_value)
             case Operation.SUM:
                 steps = self.detailed_sum_steps(query, backend_value)
             case (
@@ -384,6 +394,29 @@ class SympyStepBuilder:
             return ()
         return tuple(self._renderer.solution_step(item) for item in derivation)
 
+    def detailed_series_steps(
+        self,
+        query: Query,
+        backend_value: object,
+    ) -> tuple[SolutionStep, ...]:
+        """Build Taylor or Maclaurin steps from derivative values at the center."""
+        if len(query.arguments) != 4 or not isinstance(backend_value, sp.Basic):
+            return ()
+        expression_node, variable_node, point_node, order_node = query.arguments
+        if not isinstance(variable_node, Symbol):
+            return ()
+        expression = self._converter.to_sympy(expression_node)
+        variable = self._converter.to_sympy(variable_node)
+        point = self._converter.to_sympy(point_node)
+        order = self._converter.to_sympy(order_node)
+        if not isinstance(variable, sp.Symbol) or not isinstance(order, sp.Integer):
+            return ()
+        try:
+            derivation = derive_series(expression, variable, point, int(order), backend_value)
+        except (sp.PolynomialError, TypeError, ValueError):
+            return ()
+        return tuple(self._renderer.solution_step(item) for item in derivation)
+
     def detailed_equation_steps(
         self,
         query: Query,
@@ -439,6 +472,12 @@ class SympyStepBuilder:
         derivation = derive_radical_equation(equation, variable, roots)
         if derivation:
             return derivation
+        derivation = derive_absolute_value_equation(equation, variable, roots)
+        if derivation:
+            return derivation
+        derivation = derive_exponential_logarithmic_equation(equation, variable, roots)
+        if derivation:
+            return derivation
         denominators = tuple(
             self._converter.to_sympy(item) for item in domain_denominators(equation_expression)
         )
@@ -474,6 +513,12 @@ class SympyStepBuilder:
             cast("tuple[sp.Symbol, ...]", system_variables),
             backend_value,
         )
+        if not derivation and len(system_equations) == 2 and len(system_variables) == 2:
+            derivation = derive_nonlinear_two_by_two_system(
+                cast("tuple[sp.Equality, sp.Equality]", system_equations),
+                cast("tuple[sp.Symbol, sp.Symbol]", system_variables),
+                backend_value,
+            )
         return tuple(self._renderer.solution_step(item) for item in derivation)
 
     def detailed_derivative_steps(

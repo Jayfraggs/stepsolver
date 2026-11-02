@@ -6,6 +6,7 @@ import sympy as sp
 
 from stepsolver.derivation.limits_bounded import derive_bounded_oscillation_limit
 from stepsolver.derivation.limits_lhopital import derive_lhopital_limit
+from stepsolver.derivation.limits_two_sided import derive_two_sided_nonexistence
 from stepsolver.derivation.model import (
     BackendDerivationStep,
     BackendIdentity,
@@ -537,6 +538,7 @@ def derive_limit(
         _derive_radical_rationalization,
         _derive_infinite_radical_conjugate,
         _derive_algebraic_limit,
+        derive_two_sided_nonexistence,
     )
     for strategy in strategies:
         derivation = strategy(expression, variable, point, direction, result)

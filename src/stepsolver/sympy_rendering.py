@@ -321,7 +321,7 @@ class SympyDerivationRenderer:
             )
         if isinstance(value, tuple):
             return SequenceExpression(
-                items=tuple(self._converter.from_sympy(item) for item in value)
+                items=tuple(self.derivation_expression(item) for item in value)
             )
         return self._converter.from_sympy(value)
 
